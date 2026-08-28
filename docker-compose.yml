@@ -2,10 +2,11 @@ name: costco-pump
 
 # This stack is deliberately independent of ericdoo-infra's compose file --
 # updating/restarting this one never touches Caddy or the portfolio, and vice
-# versa. `api` is the only service that reaches outside this stack, joining
-# the `web` network that ericdoo-infra's Caddy container already publishes
-# (see ../ericdoo-infra/docker-compose.yml -- bring that stack up first so the
-# network exists, or run `docker network create web` before this).
+# versa. `api` is the only service Caddy reaches, joining the `web` network
+# that ericdoo-infra's Caddy container already publishes (see
+# ../ericdoo-infra/docker-compose.yml -- bring that stack up first so the
+# network exists, or run `docker network create web` before this). `worker`
+# separately reaches *out* to Costco via `egress` -- see below.
 
 # api/worker/enqueuer share one image, built locally by `build:` in dev
 # (`docker compose up --build`) or pulled from GHCR in prod, where the server
@@ -36,7 +37,9 @@ services:
           memory: 512m
 
   # Drains the sweep queue. Add `--scale worker=N` (or duplicate this block)
-  # later if the queue backs up -- nothing else changes.
+  # later if the queue backs up -- nothing else changes. Needs `egress` (on
+  # top of `backend`) because this is the one process that actually calls
+  # out to Costco -- everything else only ever talks to postgres/redis.
   worker:
     <<: *api-image
     command: ["python", "worker.py"]
@@ -51,6 +54,7 @@ services:
         condition: service_started
     networks:
       - backend
+      - egress
     deploy:
       resources:
         limits:
@@ -123,6 +127,9 @@ networks:
     external: true
   backend:
     internal: true # no route to the internet; DB and cache stay isolated
+  # Outbound-only for worker (reaching Costco), separate from `web` so worker
+  # never shares a network with Caddy -- nothing needs to reach it inbound.
+  egress:
 
 volumes:
   pgdata:

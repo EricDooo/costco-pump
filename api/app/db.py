@@ -25,6 +25,14 @@ async def init_models() -> None:
     idempotent and safe to run on every startup. Reach for Alembic if the
     schema starts changing shape after data already exists.
     """
+    # Local import: Warehouse/PriceReading only register themselves on
+    # Base.metadata once app.models is actually imported somewhere. api's
+    # module chain imports it transitively (via routers), but enqueuer.py
+    # doesn't -- without this, its call to create_all() silently creates
+    # nothing, and the create_hypertable() below fails on a table that was
+    # never made.
+    from . import models  # noqa: F401
+
     async with engine.begin() as conn:
         await conn.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS postgis")
         await conn.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS timescaledb")
