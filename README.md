@@ -29,13 +29,17 @@ its README for how the two are joined by one shared Docker network.
 ```sh
 cp .env.example .env   # fill in POSTGRES_PASSWORD at minimum
 docker compose up -d postgres redis
-cd api && pip install -r requirements.txt
-python -m app.scraper.ingest --once --dry-run   # confirm the live scrape still parses
-python -m app.scraper.ingest --once --init-db   # first real ingest, creates the schema
-python -m uvicorn app.main:app --reload
+cd api && uv sync
+uv run python -m app.scraper.ingest --once --dry-run   # confirm the live scrape still parses
+uv run python -m app.scraper.ingest --once --init-db   # first real ingest, creates the schema
+uv run uvicorn app.main:app --reload
 
 cd ../web && bun install && bun run dev
 ```
+
+Dependencies for both `api` (uv, `pyproject.toml`/`uv.lock`) and `web` (bun,
+`bunfig.toml`) refuse to resolve any package version published less than 14
+days ago -- same supply-chain policy, same reasoning, in both.
 
 ## Deploy
 
