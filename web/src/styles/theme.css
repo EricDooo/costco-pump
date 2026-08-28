@@ -1,0 +1,83 @@
+@import "tailwindcss";
+
+/*
+ * Same token structure as the portfolio's theme.css, for a consistent look
+ * across ericdoo.com properties -- kept as a separate file/build though,
+ * this app has its own repo and deploy.
+ */
+
+:root {
+  --background: #ffffff;
+  --foreground: #111111;
+
+  --surface: #f5f5f5;
+  --border: #e5e5e5;
+
+  --primary: #111111;
+  --primary-foreground: #ffffff;
+  --muted: #666666;
+
+  --positive: #1a7f37;
+  --negative: #cf222e;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --background: #111111;
+    --foreground: #f5f5f5;
+
+    --surface: #1a1a1a;
+    --border: #2a2a2a;
+
+    --primary: #ffffff;
+    --primary-foreground: #111111;
+    --muted: #999999;
+
+    --positive: #3fb950;
+    --negative: #f85149;
+  }
+}
+
+:root[data-theme="dark"] {
+  --background: #111111;
+  --foreground: #f5f5f5;
+
+  --surface: #1a1a1a;
+  --border: #2a2a2a;
+
+  --primary: #ffffff;
+  --primary-foreground: #111111;
+  --muted: #999999;
+
+  --positive: #3fb950;
+  --negative: #f85149;
+}
+
+@theme {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-border: var(--border);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-muted: var(--muted);
+  --color-positive: var(--positive);
+  --color-negative: var(--negative);
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+
+  --container-content: 1100px;
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+}

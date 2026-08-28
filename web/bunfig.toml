@@ -1,0 +1,5 @@
+[install]
+# Supply-chain safety net: refuse to resolve any package version published
+# less than 14 days ago. A newly published version hasn't had time for the
+# community to catch a compromised release or a broken one.
+minimumReleaseAge = 1209600 # 14 days, in seconds

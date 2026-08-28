@@ -1,0 +1,128 @@
+name: costco-pump
+
+# This stack is deliberately independent of ericdoo-infra's compose file --
+# updating/restarting this one never touches Caddy or the portfolio, and vice
+# versa. `api` is the only service that reaches outside this stack, joining
+# the `web` network that ericdoo-infra's Caddy container already publishes
+# (see ../ericdoo-infra/docker-compose.yml -- bring that stack up first so the
+# network exists, or run `docker network create web` before this).
+
+# api/worker/enqueuer share one image, built locally by `build:` in dev
+# (`docker compose up --build`) or pulled from GHCR in prod, where the server
+# only ever has this file + .env, never the source -- see deploy.yml.
+x-api-image: &api-image
+  image: ghcr.io/ericdooo/costco-pump-api:latest
+  build: ./api
+
+services:
+  api:
+    <<: *api-image
+    container_name: costco-api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://gas:${POSTGRES_PASSWORD}@postgres:5432/gas
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - web
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  # Drains the sweep queue. Add `--scale worker=N` (or duplicate this block)
+  # later if the queue backs up -- nothing else changes.
+  worker:
+    <<: *api-image
+    command: ["python", "worker.py"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://gas:${POSTGRES_PASSWORD}@postgres:5432/gas
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  # Schedules the jobs `worker` consumes -- see enqueuer.py for why this is a
+  # separate process from the worker itself.
+  enqueuer:
+    <<: *api-image
+    command: ["python", "enqueuer.py"]
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://gas:${POSTGRES_PASSWORD}@postgres:5432/gas
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
+  # timescaledb-ha's `-all` tag bundles the timescaledb + postgis extensions
+  # in one image, published for both amd64 and arm64.
+  postgres:
+    image: timescale/timescaledb-ha:pg16-all
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gas
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: gas
+    volumes:
+      - pgdata:/home/postgres/pgdata/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gas"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 3g
+
+  # Doubles as the API's response cache AND the RQ job queue's backend.
+  # noeviction (not allkeys-lru) is deliberate: eviction is instance-wide in
+  # Redis, so an LRU policy set for "it's just a cache" would just as happily
+  # evict a pending job under memory pressure. Our real data volume here is
+  # tiny (a few hundred queued jobs + small cache entries), so noeviction
+  # just means a full instance errors loudly on writes instead of silently
+  # losing one.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy noeviction
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+networks:
+  web:
+    external: true
+  backend:
+    internal: true # no route to the internet; DB and cache stay isolated
+
+volumes:
+  pgdata:
