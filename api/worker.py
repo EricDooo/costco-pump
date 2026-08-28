@@ -45,8 +45,17 @@ if __name__ == "__main__":
     threading.Thread(target=_run_loop_forever, daemon=True).start()
 
     logger.info("Warming up the Playwright session before taking any jobs...")
-    run_coro(warm_up())
-    logger.info("Warm-up done; starting to consume the sweep queue")
+    try:
+        run_coro(warm_up())
+        logger.info("Warm-up done; starting to consume the sweep queue")
+    except Exception:
+        # Non-fatal on purpose: crashing here just means `restart:
+        # unless-stopped` loops the container forever, hammering Costco on
+        # every retry. Log it and start consuming the queue anyway --
+        # individual scrape_grid_point calls already handle a dead/missing
+        # session by returning no results (see browser.fetch_grid_point),
+        # the same graceful-empty behavior as any other failed fetch.
+        logger.exception("Warm-up failed; continuing without a warmed session")
 
     connection = Redis.from_url(settings.redis_url)
     worker = SimpleWorker(["sweep"], connection=connection)
