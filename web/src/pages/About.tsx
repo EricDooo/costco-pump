@@ -18,23 +18,14 @@ export function About() {
           since the last check.
         </p>
         <p>
-          Costco's site sits behind Akamai's bot protection, which silently drops plain
-          HTTP requests regardless of source IP or rate. Getting real data means running
-          an actual browser: this uses{' '}
-          <a
-            href="https://github.com/Kaliiiiiiiiii-Vinyzu/patchright"
-            className="text-primary hover:underline"
-            target="_blank"
-            rel="noreferrer"
-          >
-            Patchright
-          </a>
-          , a patched Chromium build that removes the automation tells (like{' '}
-          <code className="text-foreground">navigator.webdriver</code>) an instrumented
-          browser normally leaves behind, so an ordinary browsing session isn't misflagged
-          as a bot for reasons that have nothing to do with how it actually behaves. It
-          still only calls Costco's own public warehouse-locator endpoint, at the same
-          deliberately low request rate.
+          Costco's site sits behind Akamai's bot protection, and this project doesn't
+          try to get past it -- the lookup this site calls isn't behind that gate at
+          all. It's the same public warehouse-locator API Costco's own site now calls
+          client-side, found by reading their public JS the same way anyone's browser
+          dev tools would show it. Reaching it does need a request whose TLS handshake
+          looks like an ordinary browser's -- Costco's edge silently drops anything
+          else, gate or no gate -- but there's no browser involved, no JavaScript runs,
+          and nothing is being solved or bypassed.
         </p>
         <p>
           Built and maintained by{' '}
