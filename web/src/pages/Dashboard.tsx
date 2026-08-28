@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { StationList } from '../components/StationList'
 import { StatsHeader } from '../components/StatsHeader'
 import { api, type StationSummary, type StatsSummary } from '../lib/api'
@@ -37,21 +38,35 @@ export function Dashboard() {
 
       {error && <p className="mt-8 text-sm text-negative">{error}</p>}
       {!error && !stats && <p className="mt-8 text-sm text-muted">Loading...</p>}
-      {stats && <div className="mt-8">
-        <StatsHeader stats={stats} />
-      </div>}
+      {stats && stations && stations.length > 0 && (
+        <div className="mt-8">
+          <StatsHeader stats={stats} />
+        </div>
+      )}
 
-      <div className="mt-8 max-w-sm">
-        <input
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search by warehouse, city, state, or zip"
-          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-primary"
-        />
-      </div>
+      {stations && stations.length === 0 ? (
+        <p className="mt-8 max-w-md text-sm text-muted">
+          No stations tracked yet -- the first sweep hasn't landed. See{' '}
+          <Link to="/about" className="text-primary hover:underline">
+            About
+          </Link>{' '}
+          for how data is collected.
+        </p>
+      ) : (
+        <>
+          <div className="mt-8 max-w-sm">
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search by warehouse, city, state, or zip"
+              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+          </div>
 
-      {stations && <StationList stations={filtered} />}
+          {stations && <StationList stations={filtered} />}
+        </>
+      )}
     </div>
   )
 }

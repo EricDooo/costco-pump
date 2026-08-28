@@ -18,6 +18,25 @@ export function About() {
           since the last check.
         </p>
         <p>
+          Costco's site sits behind Akamai's bot protection, which silently drops plain
+          HTTP requests regardless of source IP or rate. Getting real data means running
+          an actual browser: this uses{' '}
+          <a
+            href="https://github.com/Kaliiiiiiiiii-Vinyzu/patchright"
+            className="text-primary hover:underline"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Patchright
+          </a>
+          , a patched Chromium build that removes the automation tells (like{' '}
+          <code className="text-foreground">navigator.webdriver</code>) an instrumented
+          browser normally leaves behind, so an ordinary browsing session isn't misflagged
+          as a bot for reasons that have nothing to do with how it actually behaves. It
+          still only calls Costco's own public warehouse-locator endpoint, at the same
+          deliberately low request rate.
+        </p>
+        <p>
           Built and maintained by{' '}
           <a href="https://ericdoo.com" className="text-primary hover:underline">
             Eric Du
