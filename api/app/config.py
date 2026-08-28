@@ -8,9 +8,8 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     # How often the enqueuer schedules a fresh price sweep, in seconds.
-    # Warehouse hours ride along in the same response as prices (Costco's
-    # populateWarehouseDetails payload includes both) -- there's no separate
-    # hours job or external API to pay for.
+    # Warehouse hours ride along free with the locator call each sweep
+    # already makes (see scraper/client.py) -- no separate hours job.
     sweep_interval_seconds: int = 60 * 60
 
     # Grid spacing in degrees for the lat/lng sweep. Smaller = more overlap,

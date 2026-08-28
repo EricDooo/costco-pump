@@ -8,11 +8,11 @@ name: costco-pump
 # network exists, or run `docker network create web` before this). `worker`
 # separately reaches *out* to Costco via `egress` -- see below.
 
-# api/enqueuer share one lean image; worker gets its own, heavier image
-# (Patchright + Chromium -- see api/Dockerfile's two build targets). Built
-# locally by `build:` in dev (`docker compose up --build`) or pulled from
-# GHCR in prod, where the server only ever has this file + .env, never the
-# source -- see deploy.yml.
+# api, enqueuer, and worker all share one lean image (see api/Dockerfile --
+# the scraper is a plain HTTP client, so there's no heavier browser image to
+# split out anymore). Built locally by `build:` in dev (`docker compose up
+# --build`) or pulled from GHCR in prod, where the server only ever has this
+# file + .env, never the source -- see deploy.yml.
 x-api-image: &api-image
   image: ghcr.io/ericdooo/costco-pump-api:latest
   build:
@@ -43,15 +43,10 @@ services:
   # Drains the sweep queue. Add `--scale worker=N` (or duplicate this block)
   # later if the queue backs up -- nothing else changes. Needs `egress` (on
   # top of `backend`) because this is the one process that actually calls
-  # out to Costco -- everything else only ever talks to postgres/redis. Own
-  # image (not *api-image): carries Patchright + Chromium, which api and
-  # enqueuer never need. Memory limit is well above api's 512m because a
-  # real Chromium instance is genuinely heavier than a plain Python process.
+  # out to Costco -- everything else only ever talks to postgres/redis.
   worker:
-    image: ghcr.io/ericdooo/costco-pump-worker:latest
-    build:
-      context: ./api
-      target: worker
+    <<: *api-image
+    command: ["python", "worker.py"]
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+asyncpg://gas:${POSTGRES_PASSWORD}@postgres:5432/gas
@@ -67,7 +62,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2g
+          memory: 256m
 
   # Schedules the jobs `worker` consumes -- see enqueuer.py for why this is a
   # separate process from the worker itself.

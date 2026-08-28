@@ -76,10 +76,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Two images from the same Dockerfile's two targets (api/Dockerfile) --
-      # api/enqueuer's lean image, and worker's separate, heavier one
-      # (Patchright + Chromium). Distinct cache scopes so one target's cache
-      # entries don't evict the other's between runs.
+      # One image now for api, enqueuer, and worker (api/Dockerfile's only
+      # target) -- worker used to be a separate, heavier build (Playwright/
+      # Patchright + Chromium) but the scraper is a plain HTTP client now,
+      # so all three processes run the same image; docker-compose.yml picks
+      # the process via `command:`.
       - name: Build and push api (arm64)
         uses: docker/build-push-action@v7
         with:
@@ -92,19 +93,6 @@ jobs:
             ghcr.io/ericdooo/costco-pump-api:${{ github.sha }}
           cache-from: type=gha,scope=api
           cache-to: type=gha,scope=api,mode=max
-
-      - name: Build and push worker (arm64)
-        uses: docker/build-push-action@v7
-        with:
-          context: ./api
-          target: worker
-          platforms: linux/arm64
-          push: true
-          tags: |
-            ghcr.io/ericdooo/costco-pump-worker:latest
-            ghcr.io/ericdooo/costco-pump-worker:${{ github.sha }}
-          cache-from: type=gha,scope=worker
-          cache-to: type=gha,scope=worker,mode=max
 
       - name: Install deploy key
         uses: webfactory/ssh-agent@v0.10.0

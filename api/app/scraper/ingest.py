@@ -43,11 +43,12 @@ def _price(raw: dict, *keys: str) -> float | None:
 
 
 def _hours(raw: dict) -> list[str] | None:
-    """Pull warehouse hours out of the same populateWarehouseDetails payload
-    that already carries prices -- no separate lookup, no cost. Costco's
-    locator page shows hours as separate blocks (regular vs. senior/holiday);
-    we keep it as a flat list of display strings rather than guessing at a
-    stricter schema, same spirit as the price field matching above.
+    """Pull warehouse hours out of the same locator record that carries
+    location -- no separate lookup, no cost (prices are the one field that
+    comes from a separate call now; see scraper/client.py). Costco's locator
+    shows hours as separate blocks (regular vs. senior/holiday); we keep it
+    as a flat list of display strings rather than guessing at a stricter
+    schema, same spirit as the price field matching above.
     """
     value = _first(raw, "warehouseHours", "hours", "regularHours", "hoursOfOperation")
     if value is None:

@@ -1,18 +1,19 @@
 """RQ job functions -- each call is one unit of work pulled off the queue.
 
-The RQ job is a plain sync callable (SimpleWorker's contract); it submits a
-coroutine to worker.py's persistent event loop and blocks for the result,
-rather than `asyncio.run()`-ing a fresh loop per call -- see worker.py and
-scraper/browser.py for why that persistence matters here specifically.
+The RQ job is a plain sync callable; it just runs the coroutine in a fresh
+event loop per call. That used to go through worker.py's persistent
+background loop instead, because a Playwright/Patchright browser is tied to
+the event loop that created it and needed to be reused across jobs -- now
+that scraper/client.py is a plain per-call HTTP fetch with nothing to keep
+warm, that machinery is gone and this is back to the simple default.
 """
 
+import asyncio
 import datetime as dt
 import logging
 
-from worker import run_coro
-
 from ..db import SessionLocal
-from .browser import fetch_grid_point
+from .client import fetch_grid_point
 from .ingest import parse_warehouse, upsert_warehouse_and_reading
 
 logger = logging.getLogger(__name__)
@@ -20,8 +21,9 @@ logger = logging.getLogger(__name__)
 
 def scrape_grid_point(lat: float, lng: float, batch_time: str) -> int:
     """Sweep job: fetch one grid point, upsert every warehouse it returned
-    (price, location, and hours -- all come from the same response)."""
-    return run_coro(_scrape_grid_point(lat, lng, dt.datetime.fromisoformat(batch_time)))
+    (price, location, and hours -- all come from the same normalized record,
+    see scraper/client.py)."""
+    return asyncio.run(_scrape_grid_point(lat, lng, dt.datetime.fromisoformat(batch_time)))
 
 
 async def _scrape_grid_point(lat: float, lng: float, batch_time: dt.datetime) -> int:

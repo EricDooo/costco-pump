@@ -1,62 +1,23 @@
 """RQ worker -- drains the `sweep` queue that enqueuer.py fills.
 
-Runs one persistent asyncio event loop in a background thread for the whole
-process lifetime, instead of a fresh loop per job (`asyncio.run()` per
-call, the previous design). This is specifically for Patchright: a browser
-is tied to the event loop that created it, so reusing one Chromium instance
-across all ~184 jobs/hour (scraper/browser.py) requires a loop that outlives
-any single job. SQLAlchemy's async engine benefits the same way.
-
-That reuse is also why this uses RQ's SimpleWorker, not the default Worker --
-the default forks a fresh child process per job for crash isolation, which
-would leave each fork without the parent's browser or background thread.
-Trading that isolation away is fine here: jobs only ever do network I/O and
-DB writes, nothing that runs untrusted code.
+Plain RQ SimpleWorker: jobs are quick, independent HTTP calls now
+(scraper/client.py), so there's no shared resource -- like the old
+Playwright/Patchright browser session -- that needs to survive across jobs
+or stay pinned to one event loop. SimpleWorker (in-process, no fork per job)
+is still the better fit than the default forking Worker purely because
+these jobs are short and cheap enough that fork overhead would dominate;
+that's the only reason left to prefer it, not resource reuse.
 """
 
-import asyncio
 import logging
-import threading
 
 from redis import Redis
 from rq import SimpleWorker
 
 from app.config import settings
-from app.scraper.browser import warm_up
-
-logger = logging.getLogger(__name__)
-
-_loop = asyncio.new_event_loop()
-
-
-def _run_loop_forever() -> None:
-    asyncio.set_event_loop(_loop)
-    _loop.run_forever()
-
-
-def run_coro(coro):
-    """Submit a coroutine to the persistent loop and block for its result --
-    what scraper/jobs.py calls instead of asyncio.run()."""
-    return asyncio.run_coroutine_threadsafe(coro, _loop).result()
-
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    threading.Thread(target=_run_loop_forever, daemon=True).start()
-
-    logger.info("Warming up the Patchright session before taking any jobs...")
-    try:
-        run_coro(warm_up())
-        logger.info("Warm-up done; starting to consume the sweep queue")
-    except Exception:
-        # Non-fatal on purpose: crashing here just means `restart:
-        # unless-stopped` loops the container forever, hammering Costco on
-        # every retry. Log it and start consuming the queue anyway --
-        # individual scrape_grid_point calls already handle a dead/missing
-        # session by returning no results (see browser.fetch_grid_point),
-        # the same graceful-empty behavior as any other failed fetch.
-        logger.exception("Warm-up failed; continuing without a warmed session")
-
     connection = Redis.from_url(settings.redis_url)
     worker = SimpleWorker(["sweep"], connection=connection)
     worker.work()
