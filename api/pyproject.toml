@@ -19,8 +19,8 @@ dependencies = [
 [project.optional-dependencies]
 # Only the worker image installs this (+ the Chromium binary) -- api and
 # enqueuer never import app.scraper.browser, so there's no reason to carry
-# Playwright's weight in those images.
-browser = ["playwright>=1.62"]
+# Patchright's weight in those images.
+browser = ["patchright>=1.61"]
 
 [build-system]
 requires = ["hatchling"]

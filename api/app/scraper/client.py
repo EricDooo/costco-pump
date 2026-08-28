@@ -3,7 +3,7 @@
 NOT what the live sweep job uses -- in production, Costco's Akamai-fronted
 site silently drops plain httpx/curl requests regardless of source IP
 (confirmed from two different real-world networks), so scraper/jobs.py goes
-through scraper/browser.py's real Playwright/Chromium session instead. This
+through scraper/browser.py's real Patchright/Chromium session instead. This
 module is kept only as a quick manual diagnostic (worth re-checking
 occasionally in case that protection ever eases) via
 `python -m app.scraper.ingest --once --dry-run`, which does not touch the

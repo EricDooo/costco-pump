@@ -65,7 +65,7 @@ jobs:
 
       # Two images from the same Dockerfile's two targets (api/Dockerfile) --
       # api/enqueuer's lean image, and worker's separate, heavier one
-      # (Playwright + Chromium). Distinct cache scopes so one target's cache
+      # (Patchright + Chromium). Distinct cache scopes so one target's cache
       # entries don't evict the other's between runs.
       - name: Build and push api (arm64)
         uses: docker/build-push-action@v7

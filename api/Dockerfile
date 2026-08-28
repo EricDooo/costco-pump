@@ -7,7 +7,7 @@
 # is copied in, so an app-code-only change hits the layer cache for the
 # entire install and only re-runs the fast final `uv sync`):
 #   - `api`    -- api + enqueuer's image. Lean; neither ever imports
-#                 app.scraper.browser, so there's no Playwright/Chromium here.
+#                 app.scraper.browser, so there's no Patchright/Chromium here.
 #   - `worker` -- adds the `browser` extra + Chromium on top of the same base
 #                 deps. This is the one process that actually talks to
 #                 Costco (see app/scraper/browser.py for why it needs a real
@@ -62,7 +62,7 @@ COPY --from=worker-builder /app/app ./app
 COPY --from=worker-builder /app/worker.py ./
 ENV PATH="/app/.venv/bin:$PATH"
 # --with-deps installs Chromium's OS-level dependencies for this distro
-# (bookworm) too -- must run after the venv (and its playwright install) is
-# in place, since it shells out to the venv's own `playwright` CLI.
-RUN playwright install --with-deps chromium
+# (bookworm) too -- must run after the venv (and its patchright install) is
+# in place, since it shells out to the venv's own `patchright` CLI.
+RUN patchright install --with-deps chromium
 CMD ["python", "worker.py"]

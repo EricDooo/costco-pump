@@ -2,7 +2,7 @@
 
 Runs one persistent asyncio event loop in a background thread for the whole
 process lifetime, instead of a fresh loop per job (`asyncio.run()` per
-call, the previous design). This is specifically for Playwright: a browser
+call, the previous design). This is specifically for Patchright: a browser
 is tied to the event loop that created it, so reusing one Chromium instance
 across all ~184 jobs/hour (scraper/browser.py) requires a loop that outlives
 any single job. SQLAlchemy's async engine benefits the same way.
@@ -44,7 +44,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     threading.Thread(target=_run_loop_forever, daemon=True).start()
 
-    logger.info("Warming up the Playwright session before taking any jobs...")
+    logger.info("Warming up the Patchright session before taking any jobs...")
     try:
         run_coro(warm_up())
         logger.info("Warm-up done; starting to consume the sweep queue")

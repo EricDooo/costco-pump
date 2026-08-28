@@ -9,7 +9,7 @@ name: costco-pump
 # separately reaches *out* to Costco via `egress` -- see below.
 
 # api/enqueuer share one lean image; worker gets its own, heavier image
-# (Playwright + Chromium -- see api/Dockerfile's two build targets). Built
+# (Patchright + Chromium -- see api/Dockerfile's two build targets). Built
 # locally by `build:` in dev (`docker compose up --build`) or pulled from
 # GHCR in prod, where the server only ever has this file + .env, never the
 # source -- see deploy.yml.
@@ -44,7 +44,7 @@ services:
   # later if the queue backs up -- nothing else changes. Needs `egress` (on
   # top of `backend`) because this is the one process that actually calls
   # out to Costco -- everything else only ever talks to postgres/redis. Own
-  # image (not *api-image): carries Playwright + Chromium, which api and
+  # image (not *api-image): carries Patchright + Chromium, which api and
   # enqueuer never need. Memory limit is well above api's 512m because a
   # real Chromium instance is genuinely heavier than a plain Python process.
   worker:

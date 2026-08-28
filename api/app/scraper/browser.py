@@ -1,32 +1,52 @@
-"""Persistent Playwright session used by the sweep job.
+"""Persistent Patchright session used by the sweep job.
 
 Costco's site is Akamai-protected and JS-challenge-gated -- plain httpx
 requests (see client.py, now unused by the live path) get silently dropped
-regardless of source IP. A real Chromium instance executing the page's
-actual JS is what gets through, since it's genuinely just automating normal
-browsing, not spoofing a fingerprint.
+regardless of source IP, and stock Playwright's automation tells
+(navigator.webdriver, CDP artifacts, etc.) get it flagged and blocked too.
+Patchright (a patched Playwright fork, same API) strips those tells, so the
+session reads as an ordinary Chromium browsing session instead of an
+instrumented one -- that's a deliberate choice to get past Akamai's bot
+protection, not a side effect.
+
+Two things patchright's own docs call out as necessary to actually get that
+benefit, both different from the old Playwright setup below:
+  - launch_persistent_context() instead of launch()+new_context() -- a
+    profile-backed launch reads as a real Chrome session; a fresh incognito
+    context is itself a fingerprint signal.
+  - no custom user_agent override -- patchright derives UA/header details
+    from the real patched binary; overriding it reintroduces a mismatch
+    between the UA string and the browser's actual fingerprint.
+Staying headless=True despite patchright's docs preferring a headed browser
+is a deliberate tradeoff for this box: there's no display and no Xvfb in the
+image, so going headed would mean adding that to the worker Dockerfile. If
+Costco's challenge still blocks the headless profile, that's the next lever.
 
 One browser/page is launched lazily on the first job and reused for the
 worker process's entire lifetime -- launching Chromium fresh for each of the
 ~184 sweep jobs/hour would be real, avoidable CPU/memory cost on a shared
 2-vCPU box. Reuse requires everything to run on one persistent event loop
 (see worker.py's run_coro) rather than a fresh loop per job, since a
-Playwright browser is tied to the loop that created it.
+Patchright browser is tied to the loop that created it.
 """
 
 import asyncio
 import logging
+import tempfile
+from pathlib import Path
 
-from playwright.async_api import Page, async_playwright
+from patchright.async_api import BrowserContext, Page, async_playwright
 
 logger = logging.getLogger(__name__)
 
-_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-)
+# A real (if throwaway) profile dir -- launch_persistent_context requires
+# one. Doesn't need to survive container restarts: losing it just means the
+# next warm-up starts from a clean profile instead of a warmed-up one,
+# exactly like a fresh install would.
+_USER_DATA_DIR = Path(tempfile.gettempdir()) / "costco-pump-patchright-profile"
 
 _page: Page | None = None
+_context: BrowserContext | None = None
 _init_lock = asyncio.Lock()
 
 # Fetches inside the page's own JS context (see fetch_grid_point) so the
@@ -40,20 +60,22 @@ _FETCH_JS = """async (url) => {
 
 
 async def _get_page() -> Page:
-    global _page
+    global _page, _context
     async with _init_lock:
         if _page is not None:
             return _page
         playwright = await async_playwright().start()
-        browser = await playwright.chromium.launch(headless=True)
-        context = await browser.new_context(user_agent=_UA)
-        page = await context.new_page()
+        _context = await playwright.chromium.launch_persistent_context(
+            user_data_dir=str(_USER_DATA_DIR),
+            headless=True,
+        )
+        page = await _context.new_page()
         await page.goto(
             "https://www.costco.com/warehouse-locator",
             wait_until="networkidle",
             timeout=45_000,
         )
-        logger.info("Playwright session established")
+        logger.info("Patchright session established")
         _page = page
         return page
 
@@ -69,7 +91,7 @@ async def warm_up() -> None:
 
 
 async def fetch_grid_point(lat: float, lng: float) -> list[dict]:
-    global _page
+    global _page, _context
     url = (
         "/AjaxWarehouseBrowseLookupView"
         f"?latitude={lat}&longitude={lng}&hasGas=true"
@@ -83,7 +105,15 @@ async def fetch_grid_point(lat: float, lng: float) -> list[dict]:
         # Costco) -- drop it so the next call re-establishes a fresh
         # session instead of retrying against a known-broken one.
         logger.warning("Grid point %s,%s failed; resetting session", lat, lng, exc_info=True)
+        if _context is not None:
+            try:
+                await _context.close()
+            except Exception:
+                # Already dead in whatever way killed the page above --
+                # nothing left to release.
+                pass
         _page = None
+        _context = None
         return []
 
     if raw is None:
