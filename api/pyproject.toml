@@ -16,6 +16,12 @@ dependencies = [
   "slowapi>=0.1.9",
 ]
 
+[project.optional-dependencies]
+# Only the worker image installs this (+ the Chromium binary) -- api and
+# enqueuer never import app.scraper.browser, so there's no reason to carry
+# Playwright's weight in those images.
+browser = ["playwright>=1.62"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

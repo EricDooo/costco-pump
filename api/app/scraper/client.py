@@ -1,19 +1,13 @@
-"""Fetches against Costco's public warehouse-locator endpoint.
+"""Plain-HTTP fetch against Costco's public warehouse-locator endpoint.
 
-This is the same endpoint costco.com's own "find a warehouse" page calls when
-you search near a location -- it's a public lookup, not an authenticated API.
-We stay polite about it: a normal browser-ish User-Agent that identifies the
-project, retries with backoff instead of hammering on failure, bounded
-concurrency, and a conservative poll interval (see Settings) rather than
-continuous scraping.
-
-Two entry points:
-  - `fetch_point` -- one grid point, one HTTP call. What the per-point RQ job
-    (scraper/jobs.py) uses; concurrency there is bounded by how many `worker`
-    processes are draining the queue, not by anything in this module.
-  - `sweep` -- every grid point in one process, for manual/dry-run testing
-    (`python -m app.scraper.ingest --once --dry-run`) without going through
-    the queue at all.
+NOT what the live sweep job uses -- in production, Costco's Akamai-fronted
+site silently drops plain httpx/curl requests regardless of source IP
+(confirmed from two different real-world networks), so scraper/jobs.py goes
+through scraper/browser.py's real Playwright/Chromium session instead. This
+module is kept only as a quick manual diagnostic (worth re-checking
+occasionally in case that protection ever eases) via
+`python -m app.scraper.ingest --once --dry-run`, which does not touch the
+queue or the database.
 """
 
 import asyncio
