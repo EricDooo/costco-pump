@@ -29,7 +29,12 @@ def enqueue_sweep() -> None:
     batch_time = dt.datetime.now(dt.timezone.utc).isoformat()
     points = grid_points(settings.grid_step_degrees)
     for lat, lng in points:
-        sweep_queue.enqueue("app.scraper.jobs.scrape_grid_point", lat, lng, batch_time)
+        # RQ's default 180s job timeout is fine for a warm session's fetch,
+        # but a browser page.goto can occasionally take a while on its own
+        # -- 240s gives real headroom without masking a truly hung job.
+        sweep_queue.enqueue(
+            "app.scraper.jobs.scrape_grid_point", lat, lng, batch_time, job_timeout=240
+        )
     logger.info("Enqueued %d sweep jobs (batch %s)", len(points), batch_time)
 
 

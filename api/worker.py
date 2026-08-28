@@ -22,6 +22,7 @@ from redis import Redis
 from rq import SimpleWorker
 
 from app.config import settings
+from app.scraper.browser import warm_up
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,10 @@ def run_coro(coro):
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     threading.Thread(target=_run_loop_forever, daemon=True).start()
+
+    logger.info("Warming up the Playwright session before taking any jobs...")
+    run_coro(warm_up())
+    logger.info("Warm-up done; starting to consume the sweep queue")
 
     connection = Redis.from_url(settings.redis_url)
     worker = SimpleWorker(["sweep"], connection=connection)

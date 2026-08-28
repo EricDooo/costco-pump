@@ -58,6 +58,16 @@ async def _get_page() -> Page:
         return page
 
 
+async def warm_up() -> None:
+    """Establish the session up front, at worker startup -- not lazily on
+    whatever job happens to run first. Launching Chromium + a networkidle
+    page load can take longer than RQ's default 180s job timeout on its
+    own; paying that cost during startup (uncounted against any job) rather
+    than inside the first scrape_grid_point call is what actually fixes
+    that, not just a bigger timeout number."""
+    await _get_page()
+
+
 async def fetch_grid_point(lat: float, lng: float) -> list[dict]:
     global _page
     url = (
