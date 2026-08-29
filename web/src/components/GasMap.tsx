@@ -12,13 +12,19 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import { useEffect, useRef } from 'react'
 import type { StationSummary } from '../lib/api'
 import { useTheme } from '../hooks/useTheme'
-import { ensurePmtilesProtocol } from '../lib/pmtilesProtocol'
+import { ensureMaplibreSetup } from '../lib/maplibreSetup'
 import { DOMESTIC_TILES_URL } from '../lib/tiles'
 
 const SOURCE_ID = 'protomaps'
 const STATIONS_SOURCE_ID = 'stations'
 const GLYPHS_URL = 'https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf'
 const LABEL_FONT = 'Noto Sans Regular'
+// The basemap's own POI icons (town/capital dots, etc -- unrelated to the
+// price pills below) come from a sprite sheet, one per flavor. Missing
+// this was a real bug: every place-label layer that references an icon
+// logged "Image ... could not be loaded" (harmless on its own -- those
+// layers just render text with no icon -- but worth fixing since it's
+// what the official style expects).
 
 // Individual stations render as a price-tag pill (a rounded badge with a
 // small pointer tail, like GasBuddy/most real gas-price maps) instead of a
@@ -100,9 +106,13 @@ function registerPillImages(map: MaplibreMap) {
   if (!map.hasImage(PILL_FALLBACK_ID)) map.addImage(PILL_FALLBACK_ID, makePillImage('#9ca3af'), { pixelRatio: 2 })
 }
 
-function resolvedFlavor(theme: 'light' | 'dark' | 'system'): Flavor {
+function resolvedFlavorName(theme: 'light' | 'dark' | 'system'): 'light' | 'dark' {
   const dark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
-  return dark ? DARK : LIGHT
+  return dark ? 'dark' : 'light'
+}
+
+function flavorByName(name: 'light' | 'dark'): Flavor {
+  return name === 'dark' ? DARK : LIGHT
 }
 
 function toFeatureCollection(stations: StationSummary[]): FeatureCollection<Point> {
@@ -124,10 +134,12 @@ function toFeatureCollection(stations: StationSummary[]): FeatureCollection<Poin
   }
 }
 
-function buildStyle(flavor: Flavor, stations: StationSummary[]): StyleSpecification {
+function buildStyle(flavorName: 'light' | 'dark', stations: StationSummary[]): StyleSpecification {
+  const flavor = flavorByName(flavorName)
   return {
     version: 8,
     glyphs: GLYPHS_URL,
+    sprite: `https://protomaps.github.io/basemaps-assets/sprites/v4/${flavorName}`,
     sources: {
       [SOURCE_ID]: {
         type: 'vector',
@@ -278,11 +290,11 @@ export function GasMap({ stations }: { stations: StationSummary[] }) {
   // costs nothing that matters.
   useEffect(() => {
     if (!containerRef.current) return
-    ensurePmtilesProtocol()
+    ensureMaplibreSetup()
 
     const map = new MaplibreMap({
       container: containerRef.current,
-      style: buildStyle(resolvedFlavor(theme), stations),
+      style: buildStyle(resolvedFlavorName(theme), stations),
       center: [-98, 39],
       zoom: 3.3,
       minZoom: 2,
@@ -291,6 +303,11 @@ export function GasMap({ stations }: { stations: StationSummary[] }) {
     })
     map.addControl(new NavigationControl({ showCompass: false }), 'top-right')
     map.on('load', () => registerPillImages(map))
+    // MapLibre doesn't throw or reject on a style/source/tile problem, it
+    // fires this event -- with nothing listening, that's silent failure. Cost
+    // real debugging time tracking down a production-only bug this way
+    // (see maplibreSetup.ts): the map just sat blank with an empty console.
+    map.on('error', (e) => console.error('MapLibre error:', e.error))
 
     map.on('click', 'clusters', async (e: MapLayerMouseEvent) => {
       const feature = e.features?.[0]
