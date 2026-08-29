@@ -94,16 +94,29 @@ function makePillImage(fillColor: string): ImageData {
   return ctx.getImageData(0, 0, w, h)
 }
 
+const PILL_COLOR_BY_ID = new Map<string, string>([
+  ...PRICE_TIERS.map((t): [string, string] => [t.id, t.color]),
+  [PILL_FALLBACK_ID, '#9ca3af'],
+])
+
 /** Registers every pill tier image with this map instance -- images are
  * per-Map-instance state, so this has to re-run each time GasMap creates a
  * new one (see the effect below, which rebuilds the whole map rather than
- * patching an existing one). Safe to call once the map's 'load' event has
- * fired, before any symbol layer referencing these ids actually renders. */
+ * patching an existing one).
+ *
+ * Deliberately a lazy resolver, not an eager `map.addImage()` loop run from
+ * the map's 'load' event: that raced MapLibre's own first paint attempt in
+ * production -- data-driven GeoJSON sources are available instantly (no
+ * network fetch), so the symbol layer could try to render before 'load'
+ * even finished, logging "Image ... could not be loaded" and leaving pills
+ * as bare floating text with no fill. setMissingStyleImageResolver runs
+ * synchronously exactly when a requested image is actually missing,
+ * whenever that turns out to be -- no race to lose. */
 function registerPillImages(map: MaplibreMap) {
-  for (const tier of PRICE_TIERS) {
-    if (!map.hasImage(tier.id)) map.addImage(tier.id, makePillImage(tier.color), { pixelRatio: 2 })
-  }
-  if (!map.hasImage(PILL_FALLBACK_ID)) map.addImage(PILL_FALLBACK_ID, makePillImage('#9ca3af'), { pixelRatio: 2 })
+  map.setMissingStyleImageResolver((id) => {
+    const color = PILL_COLOR_BY_ID.get(id)
+    if (color) map.addImage(id, makePillImage(color), { pixelRatio: 2 })
+  })
 }
 
 function resolvedFlavorName(theme: 'light' | 'dark' | 'system'): 'light' | 'dark' {
@@ -317,7 +330,9 @@ export function GasMap({ stations, tilesFile, center, zoom }: GasMapProps) {
       attributionControl: { compact: true },
     })
     map.addControl(new NavigationControl({ showCompass: false }), 'top-right')
-    map.on('load', () => registerPillImages(map))
+    // Synchronously, not deferred to 'load' -- see registerPillImages' own
+    // comment for why that raced MapLibre's first paint in production.
+    registerPillImages(map)
     // MapLibre doesn't throw or reject on a style/source/tile problem, it
     // fires this event -- with nothing listening, that's silent failure. Cost
     // real debugging time tracking down a production-only bug this way
