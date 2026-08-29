@@ -25,6 +25,19 @@ export default defineConfig({
           },
     },
   },
+  // `bun run build && bun run preview` -- tests the actual production
+  // bundle (unlike `bun run dev`, which pre-bundles dependencies
+  // differently and completely masked a real maplibre-gl-worker-loading
+  // bug that only ever showed up in a real build; see maplibreSetup.ts).
+  // Defaults both proxies to prod since there's no local equivalent worth
+  // proxying to for testing a production build specifically; override with
+  // the same VITE_API_PROXY_TARGET as dev if that ever changes.
+  preview: {
+    proxy: {
+      '/costcogas/api': { target: process.env.VITE_API_PROXY_TARGET ?? 'https://ericdoo.com', changeOrigin: true },
+      '/costcogas/tiles': { target: process.env.VITE_API_PROXY_TARGET ?? 'https://ericdoo.com', changeOrigin: true },
+    },
+  },
   optimizeDeps: {
     // maplibre-gl bundles its own tile-parsing web worker; Vite's dep
     // pre-bundling rewrites its worker URL in a way that leaves the worker
