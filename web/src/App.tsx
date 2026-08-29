@@ -3,6 +3,7 @@ import { Route, Routes } from 'react-router-dom'
 import { Footer } from './layout/Footer'
 import { Header } from './layout/Header'
 import { About } from './pages/About'
+import { Analytics } from './pages/Analytics'
 import { Dashboard } from './pages/Dashboard'
 import { StationDetail } from './pages/StationDetail'
 
@@ -23,6 +24,7 @@ function App() {
             </Suspense>
           }
         />
+        <Route path="/analytics" element={<Analytics />} />
         <Route path="/stations" element={<Dashboard />} />
         <Route path="/stations/:id" element={<StationDetail />} />
         <Route path="/about" element={<About />} />

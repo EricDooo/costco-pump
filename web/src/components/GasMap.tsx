@@ -13,7 +13,7 @@ import { useEffect, useRef } from 'react'
 import type { StationSummary } from '../lib/api'
 import { useTheme } from '../hooks/useTheme'
 import { ensureMaplibreSetup } from '../lib/maplibreSetup'
-import { DOMESTIC_TILES_URL } from '../lib/tiles'
+import { tilesUrlFor } from '../lib/tiles'
 
 const SOURCE_ID = 'protomaps'
 const STATIONS_SOURCE_ID = 'stations'
@@ -134,7 +134,7 @@ function toFeatureCollection(stations: StationSummary[]): FeatureCollection<Poin
   }
 }
 
-function buildStyle(flavorName: 'light' | 'dark', stations: StationSummary[]): StyleSpecification {
+function buildStyle(flavorName: 'light' | 'dark', stations: StationSummary[], tilesFile: string): StyleSpecification {
   const flavor = flavorByName(flavorName)
   return {
     version: 8,
@@ -143,7 +143,7 @@ function buildStyle(flavorName: 'light' | 'dark', stations: StationSummary[]): S
     sources: {
       [SOURCE_ID]: {
         type: 'vector',
-        url: `pmtiles://${DOMESTIC_TILES_URL}`,
+        url: `pmtiles://${tilesUrlFor(tilesFile)}`,
         attribution:
           '<a href="https://protomaps.com">Protomaps</a> © <a href="https://openstreetmap.org">OpenStreetMap</a>',
       },
@@ -277,10 +277,19 @@ function popupHtml(props: Record<string, unknown>): string {
   `
 }
 
-/** National map of every domestic (US/CA/UK) station with a live price,
- * clustered by proximity. Basemap is a self-hosted Protomaps PMTiles
- * extract (see lib/tiles.ts) -- no third-party map API key or quota. */
-export function GasMap({ stations }: { stations: StationSummary[] }) {
+interface GasMapProps {
+  stations: StationSummary[]
+  /** Filename under /costcogas/tiles/ for this region's basemap extract --
+   * see lib/regions.ts. */
+  tilesFile: string
+  center: [number, number]
+  zoom: number
+}
+
+/** Map of every station in the current region with a live price, clustered
+ * by proximity. Basemap is a self-hosted Protomaps PMTiles extract (see
+ * lib/tiles.ts) -- no third-party map API key or quota. */
+export function GasMap({ stations, tilesFile, center, zoom }: GasMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const { theme } = useTheme()
 
@@ -300,10 +309,10 @@ export function GasMap({ stations }: { stations: StationSummary[] }) {
 
     const map = new MaplibreMap({
       container: containerRef.current,
-      style: buildStyle(resolvedFlavorName(theme), stations),
-      center: [-98, 39],
-      zoom: 3.3,
-      minZoom: 2,
+      style: buildStyle(resolvedFlavorName(theme), stations, tilesFile),
+      center,
+      zoom,
+      minZoom: 1,
       maxZoom: 16,
       attributionControl: { compact: true },
     })
@@ -345,7 +354,10 @@ export function GasMap({ stations }: { stations: StationSummary[] }) {
     }
 
     return () => map.remove()
-  }, [theme, stations])
+    // center is a tuple from regions.ts's static REGIONS array, so it's a
+    // stable reference per region (not a fresh array each render) as long
+    // as the caller passes region.center straight through -- see MapView.tsx.
+  }, [theme, stations, tilesFile, center, zoom])
 
   return <div ref={containerRef} className="h-full w-full" />
 }

@@ -41,7 +41,7 @@ _STATE_AVG_TEMPLATE = """
     where p.time > now() - interval '7 days' and p.regular_price is not null
     group by w.state
     order by avg_price {direction}
-    limit 5
+    limit 20
     """
 
 _MONTHLY_AVG_SQL = text(

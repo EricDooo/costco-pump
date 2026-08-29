@@ -1,16 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { GasMap } from '../components/GasMap'
 import { api, type StationSummary, type StatsSummary } from '../lib/api'
+import { CA_PROVINCES, REGIONS, regionById, type RegionId } from '../lib/regions'
 
 function formatPrice(price: number | null): string {
   return price === null ? '--' : `$${price.toFixed(2)}`
 }
-
-// warehouses.json's US/Canada/UK ids stay below this; scraper/international.py
-// hashes every other country into 900_000+ blocks (see that module's
-// docstring). Matches the "domestic" bucket this default map view shows --
-// per-country views (see costco-pump README's "by region" plan) come later.
-const DOMESTIC_ID_CEILING = 900_000
 
 function median(values: number[]): number | null {
   if (values.length === 0) return null
@@ -19,10 +14,19 @@ function median(values: number[]): number | null {
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
 }
 
+const REGION_STORAGE_KEY = 'costcogas:region'
+
+function getStoredRegion(): RegionId {
+  if (typeof window === 'undefined') return 'us'
+  const stored = window.localStorage.getItem(REGION_STORAGE_KEY)
+  return REGIONS.some((r) => r.id === stored) ? (stored as RegionId) : 'us'
+}
+
 export function MapView() {
   const [stations, setStations] = useState<StationSummary[] | null>(null)
   const [stats, setStats] = useState<StatsSummary | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [regionId, setRegionId] = useState<RegionId>(() => getStoredRegion())
 
   useEffect(() => {
     Promise.all([api.stations(), api.statsSummary()])
@@ -33,25 +37,68 @@ export function MapView() {
       .catch(() => setError('Could not load live data right now.'))
   }, [])
 
-  const domestic = useMemo(() => stations?.filter((s) => s.id < DOMESTIC_ID_CEILING) ?? [], [stations])
+  const region = regionById(regionId)
+
+  function selectRegion(id: RegionId) {
+    setRegionId(id)
+    try {
+      window.localStorage.setItem(REGION_STORAGE_KEY, id)
+    } catch {
+      // localStorage unavailable (private mode, etc.) -- selection just won't persist.
+    }
+  }
+
+  const regionStations = useMemo(() => stations?.filter(region.matches) ?? [], [stations, region])
 
   const summary = useMemo(() => {
-    const priced = domestic.filter((s): s is StationSummary & { regular_price: number } => s.regular_price !== null)
+    const priced = regionStations.filter(
+      (s): s is StationSummary & { regular_price: number } => s.regular_price !== null,
+    )
     if (priced.length === 0) return null
     const med = median(priced.map((s) => s.regular_price))
     const lowest = priced.reduce((a, b) => (a.regular_price < b.regular_price ? a : b))
     const highest = priced.reduce((a, b) => (a.regular_price > b.regular_price ? a : b))
     return { median: med, lowest, highest }
-  }, [domestic])
+  }, [regionStations])
+
+  // stats/summary's state breakdown mixes US states and Canadian provinces
+  // together (they share one warehouses table) -- split by the same
+  // province-code check regions.ts uses, so "cheapest states" only shows
+  // entries that actually belong to the selected region.
+  const stateBreakdown = useMemo(() => {
+    if (!stats || !region.showStateBreakdown) return []
+    const inRegion = regionId === 'ca' ? CA_PROVINCES.has.bind(CA_PROVINCES) : (s: string) => !CA_PROVINCES.has(s)
+    // stats/summary returns its top 20 across US+Canada combined (see
+    // app/routers/stats.py) precisely so filtering by country here still
+    // leaves enough to show a real top 5, instead of the top 5 *overall*
+    // silently losing entries to whichever country dominated it.
+    return stats.cheapest_states.filter((s) => inRegion(s.state)).slice(0, 5)
+  }, [stats, region, regionId])
 
   return (
     <div>
-      <div className="mx-auto max-w-content px-6 pt-8 pb-4">
-        <h1 className="text-2xl font-bold text-foreground">Costco Gas Prices</h1>
-        <p className="mt-1 text-sm text-muted">
-          Every US, Canada, and UK Costco with a gas station, swept and re-checked on a
-          schedule.
-        </p>
+      <div className="mx-auto flex max-w-content items-start justify-between gap-4 px-6 pt-8 pb-4">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">Costco Gas Prices</h1>
+          <p className="mt-1 text-sm text-muted">
+            Every Costco with a gas station, swept and re-checked on a schedule.
+          </p>
+        </div>
+
+        <label className="flex-shrink-0">
+          <span className="sr-only">Region</span>
+          <select
+            value={regionId}
+            onChange={(e) => selectRegion(e.target.value as RegionId)}
+            className="rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+          >
+            {REGIONS.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.label}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
 
       {error && <p className="mx-auto max-w-content px-6 text-sm text-negative">{error}</p>}
@@ -61,7 +108,7 @@ export function MapView() {
       <div className="flex flex-col gap-4 px-4 sm:px-6 lg:flex-row lg:items-start">
         <aside className="flex-shrink-0 space-y-6 lg:w-72">
           <div className="rounded-lg border border-border bg-surface p-4">
-            <div className="text-xs font-medium text-muted">National median (regular)</div>
+            <div className="text-xs font-medium text-muted">{region.label} median (regular)</div>
             <div className="mt-1 text-3xl font-bold text-foreground">
               {summary ? formatPrice(summary.median) : '--'}
             </div>
@@ -85,11 +132,13 @@ export function MapView() {
             )}
           </div>
 
-          {stats && stats.cheapest_states.length > 0 && (
+          {stateBreakdown.length > 0 && (
             <div className="rounded-lg border border-border bg-surface p-4">
-              <div className="text-xs font-medium text-muted">Cheapest states (7-day avg)</div>
+              <div className="text-xs font-medium text-muted">
+                Cheapest {regionId === 'ca' ? 'provinces' : 'states'} (7-day avg)
+              </div>
               <ol className="mt-3 space-y-2">
-                {stats.cheapest_states.map((s, i) => (
+                {stateBreakdown.map((s, i) => (
                   <li key={s.state} className="flex items-center justify-between text-sm">
                     <span className="text-foreground">
                       <span className="mr-2 text-muted">{i + 1}</span>
@@ -104,7 +153,21 @@ export function MapView() {
         </aside>
 
         <div className="h-[75vh] min-h-[500px] w-full overflow-hidden rounded-lg border border-border">
-          {domestic.length > 0 && <GasMap stations={domestic} />}
+          {regionStations.length > 0 && (
+            <GasMap
+              key={region.id}
+              stations={regionStations}
+              tilesFile={region.tilesFile}
+              center={region.center}
+              zoom={region.zoom}
+            />
+          )}
+          {stations && regionStations.length === 0 && (
+            <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted">
+              No {region.label} stations tracked yet -- the international sweep for this
+              region hasn't landed data. Check back soon.
+            </div>
+          )}
         </div>
       </div>
     </div>

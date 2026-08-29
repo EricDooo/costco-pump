@@ -4,7 +4,8 @@ import { cn } from '../lib/cn'
 
 const tabs = [
   { to: '/', label: 'Map', end: true },
-  { to: '/stations', label: 'Stations' },
+  { to: '/analytics', label: 'Analytics' },
+  { to: '/stations', label: 'Fuel Stations' },
   { to: '/about', label: 'About' },
 ]
 

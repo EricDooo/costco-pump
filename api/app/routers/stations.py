@@ -71,7 +71,7 @@ async def list_stations(
 async def get_station(
     request: Request,
     warehouse_id: int,
-    days: int = Query(default=90, ge=1, le=365),
+    days: int = Query(default=30, ge=1, le=365),
     session: AsyncSession = Depends(get_session),
 ) -> StationDetail:
     wh = await session.get(Warehouse, warehouse_id)

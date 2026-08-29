@@ -30,7 +30,7 @@ export function Dashboard() {
 
   return (
     <div className="mx-auto max-w-content px-6 py-12">
-      <h1 className="text-2xl font-bold text-foreground">All Stations</h1>
+      <h1 className="text-2xl font-bold text-foreground">Fuel Stations</h1>
       <p className="mt-2 max-w-2xl text-sm text-muted">
         Every tracked Costco with a gas station, searchable by warehouse, city, state,
         or zip. See the <Link to="/" className="text-primary hover:underline">map</Link> for
