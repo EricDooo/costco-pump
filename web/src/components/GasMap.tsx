@@ -4,6 +4,7 @@ import {
   Map as MaplibreMap,
   NavigationControl,
   Popup,
+  type ExpressionSpecification,
   type GeoJSONSource,
   type MapLayerMouseEvent,
   type StyleSpecification,
@@ -38,6 +39,16 @@ const PRICE_TIERS: { id: string; color: string; max: number }[] = [
 ]
 const PILL_FALLBACK_ID = 'pill-unknown'
 
+// Shared between the plain and "7d low" branches of unclustered-point's
+// text-field below -- same price string either way, just with or without a
+// badge line above it.
+const PRICE_TEXT_EXPR: ExpressionSpecification = [
+  'case',
+  ['==', ['get', 'regular_price'], null],
+  '--',
+  ['concat', '$', ['number-format', ['get', 'regular_price'], { 'min-fraction-digits': 2, 'max-fraction-digits': 2 }]],
+]
+
 // Same 5-color scale, but for individual pills: tier picked by how far a
 // station sits from its own state's median (price_ratio, computed below),
 // not a fixed nationwide dollar amount -- a state that's uniformly pricier
@@ -57,9 +68,18 @@ const TAIL_H = 6
 const PILL_TEXT_SIZE = 11
 // Tail tip to pill center, in ems of PILL_TEXT_SIZE (as text-offset expects).
 const PILL_TEXT_OFFSET_EM = -(TAIL_H + PILL_H / 2) / PILL_TEXT_SIZE
-// Tail tip to just above the pill's top edge, for the "7d low" badge.
+// "7d low" badge: rendered as a second line of the SAME text-field as the
+// price (via a `format` run), not a separate symbol layer -- two independent
+// symbol layers get independent collision passes, so at high station density
+// one could survive collision while the other got dropped, leaving either an
+// orphaned badge with no pill or vice versa. One text-field means one
+// collision box covering both lines, so they always show or hide together.
 const LOW_BADGE_TEXT_SIZE = 9
-const LOW_BADGE_OFFSET_EM = -(TAIL_H + PILL_H + 3) / LOW_BADGE_TEXT_SIZE
+const LOW_BADGE_FONT_SCALE = LOW_BADGE_TEXT_SIZE / PILL_TEXT_SIZE
+// Anchored 'bottom' on the 2-line block (badge line above the price line);
+// tuned so the price line lands at the same spot PILL_TEXT_OFFSET_EM gives
+// it in the plain 1-line case.
+const LOW_PILL_TEXT_OFFSET_EM = -(TAIL_H + 3) / PILL_TEXT_SIZE
 
 function makePillImage(fillColor: string): ImageData {
   const scale = 2 // draw at 2x, registered with pixelRatio 2, for crisp edges/text
@@ -399,18 +419,32 @@ function buildStyle(
           'icon-anchor': 'bottom',
           // No allow-overlap: keeps MapLibre's default collision detection
           // so dense areas thin out instead of stacking illegible pills.
+          //
+          // The "7d low" badge used to be a second symbol layer sharing this
+          // same point -- but two layers get two independent collision
+          // passes, so at high density one could get placed while the other
+          // got dropped, leaving an orphaned badge with no pill (or a pill
+          // with no badge). A `format` run folds it into this layer's own
+          // text-field instead: one symbol instance, one collision box, so
+          // the badge and price always show or hide together.
           'text-field': [
             'case',
-            ['==', ['get', 'regular_price'], null],
-            '--',
-            ['concat', '$', ['number-format', ['get', 'regular_price'], { 'min-fraction-digits': 2, 'max-fraction-digits': 2 }]],
+            ['==', ['get', 'is_7d_low'], true],
+            ['format', '7d low', { 'font-scale': LOW_BADGE_FONT_SCALE, 'text-color': '#fbbf24' }, '\n', {}, PRICE_TEXT_EXPR, {}],
+            PRICE_TEXT_EXPR,
           ],
           'text-font': [PILL_FONT],
           'text-size': PILL_TEXT_SIZE,
-          // 'center', not 'bottom': PILL_TEXT_OFFSET_EM already measures to
-          // the pill's center, so 'bottom' would push the glyph above it.
-          'text-anchor': 'center',
-          'text-offset': [0, PILL_TEXT_OFFSET_EM],
+          // 'bottom' + LOW_PILL_TEXT_OFFSET_EM for the 2-line (badge+price)
+          // case, 'center' + PILL_TEXT_OFFSET_EM for the plain 1-line case --
+          // both tuned to land the price line in the same spot either way.
+          'text-anchor': ['case', ['==', ['get', 'is_7d_low'], true], 'bottom', 'center'],
+          'text-offset': [
+            'case',
+            ['==', ['get', 'is_7d_low'], true],
+            ['literal', [0, LOW_PILL_TEXT_OFFSET_EM]],
+            ['literal', [0, PILL_TEXT_OFFSET_EM]],
+          ],
         },
         // Dark halo behind the white text -- plain white wasn't reliably
         // readable against the paler tiers (lime/yellow) on its own.
@@ -418,27 +452,6 @@ function buildStyle(
           'text-color': '#ffffff',
           'text-halo-color': '#00000099',
           'text-halo-width': 1.2,
-        },
-      },
-      {
-        // A small badge above the pill for a station at its own 7-day low --
-        // a separate layer rather than baking it into the pill image itself,
-        // since it's a per-station flag independent of the price-tier color.
-        id: 'seven-day-low-badge',
-        type: 'symbol',
-        source: STATIONS_SOURCE_ID,
-        filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'is_7d_low'], true]],
-        layout: {
-          'text-field': '7d low',
-          'text-font': [PILL_FONT],
-          'text-size': LOW_BADGE_TEXT_SIZE,
-          'text-anchor': 'bottom',
-          'text-offset': [0, LOW_BADGE_OFFSET_EM],
-        },
-        paint: {
-          'text-color': '#fbbf24',
-          'text-halo-color': '#00000099',
-          'text-halo-width': 1,
         },
       },
     ],
