@@ -25,10 +25,9 @@ const GLYPHS_URL = 'https://protomaps.github.io/basemaps-assets/fonts/{fontstack
 // Medium is the heaviest weight actually available.
 const PILL_FONT = 'Noto Sans Medium'
 
-// A station renders as a price-tag pill (colored badge + tail) instead of a
-// plain dot -- tier picked per feature by a step expression on regular_price.
-// Saturated/dark (600-weight) rather than pastel -- better contrast for
-// white text, especially on the cluster circles this scale also colors.
+// Absolute-price scale for clusters/state-circles (zoomed out: which
+// areas are cheap or pricey in dollar terms). Saturated/dark (600-weight)
+// rather than pastel -- better contrast for the white text on top.
 const PRICE_TIERS: { id: string; color: string; max: number }[] = [
   { id: 'pill-1', color: '#16a34a', max: 3.25 },
   { id: 'pill-2', color: '#65a30d', max: 3.75 },
@@ -37,6 +36,16 @@ const PRICE_TIERS: { id: string; color: string; max: number }[] = [
   { id: 'pill-5', color: '#dc2626', max: Infinity },
 ]
 const PILL_FALLBACK_ID = 'pill-unknown'
+
+// Same 5-color scale, but for individual pills: tier picked by how far a
+// station sits from its own state's median (price_ratio, computed below),
+// not a fixed nationwide dollar amount -- a state that's uniformly pricier
+// or cheaper than the rest of the country still shows a spread.
+const PILL_TIERS = PRICE_TIERS.map((t, i) => ({
+  id: t.id,
+  color: t.color,
+  max: [-0.02, -0.005, 0.005, 0.02, Infinity][i]!,
+}))
 
 // CSS px; canvas is drawn at 2x/pixelRatio 2 for crisp text (see
 // makePillImage). The text offset below depends on this exact geometry.
@@ -115,22 +124,46 @@ function flavorByName(name: 'light' | 'dark'): Flavor {
   return name === 'dark' ? DARK : LIGHT
 }
 
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2
+}
+
 function toFeatureCollection(stations: StationSummary[]): FeatureCollection<Point> {
+  // Each station's price_ratio (see PILL_TIERS) is relative to its own
+  // state's median -- for a region with no real state subdivision (see
+  // regions.ts), `state` is uniform across the list, so this naturally
+  // becomes "relative to the region" instead.
+  const priceByState = new Map<string, number[]>()
+  for (const s of stations) {
+    if (s.regular_price === null) continue
+    const list = priceByState.get(s.state)
+    if (list) list.push(s.regular_price)
+    else priceByState.set(s.state, [s.regular_price])
+  }
+  const medianByState = new Map([...priceByState].map(([state, prices]) => [state, median(prices)]))
+
   return {
     type: 'FeatureCollection',
     features: stations
       .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon))
-      .map((s) => ({
-        type: 'Feature',
-        geometry: { type: 'Point', coordinates: [s.lon, s.lat] },
-        properties: {
-          id: s.id,
-          name: s.name,
-          city: s.city,
-          state: s.state,
-          regular_price: s.regular_price,
-        },
-      })),
+      .map((s) => {
+        const stateMedian = medianByState.get(s.state)
+        const priceRatio = stateMedian && s.regular_price !== null ? (s.regular_price - stateMedian) / stateMedian : null
+        return {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [s.lon, s.lat] },
+          properties: {
+            id: s.id,
+            name: s.name,
+            city: s.city,
+            state: s.state,
+            regular_price: s.regular_price,
+            price_ratio: priceRatio,
+          },
+        }
+      }),
   }
 }
 
@@ -320,24 +353,24 @@ function buildStyle(
         source: STATIONS_SOURCE_ID,
         filter: ['!', ['has', 'point_count']],
         layout: {
-          // Pre-rendered pill image per PRICE_TIERS, picked by price;
+          // Pre-rendered pill image per PILL_TIERS, picked by price_ratio;
           // pill-unknown when there's no live reading yet.
           'icon-image': [
             'case',
-            ['==', ['get', 'regular_price'], null],
+            ['==', ['get', 'price_ratio'], null],
             PILL_FALLBACK_ID,
             [
               'step',
-              ['get', 'regular_price'],
-              PRICE_TIERS[0]!.id,
-              PRICE_TIERS[0]!.max,
-              PRICE_TIERS[1]!.id,
-              PRICE_TIERS[1]!.max,
-              PRICE_TIERS[2]!.id,
-              PRICE_TIERS[2]!.max,
-              PRICE_TIERS[3]!.id,
-              PRICE_TIERS[3]!.max,
-              PRICE_TIERS[4]!.id,
+              ['get', 'price_ratio'],
+              PILL_TIERS[0]!.id,
+              PILL_TIERS[0]!.max,
+              PILL_TIERS[1]!.id,
+              PILL_TIERS[1]!.max,
+              PILL_TIERS[2]!.id,
+              PILL_TIERS[2]!.max,
+              PILL_TIERS[3]!.id,
+              PILL_TIERS[3]!.max,
+              PILL_TIERS[4]!.id,
             ],
           ],
           'icon-anchor': 'bottom',
