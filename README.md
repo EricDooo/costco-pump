@@ -31,6 +31,18 @@ prices are a hypertable partitioned on time, locations are geography points.
 This stack is entirely independent of `ericdoo-infra`'s Caddy stack -- see
 its README for how the two are joined by one shared Docker network.
 
+### The map
+
+`web`'s home page renders every station on a self-hosted [Protomaps
+PMTiles](https://docs.protomaps.com/) basemap via MapLibre GL -- no
+third-party map API key, account, or monthly quota, ever. The tile archive
+itself is just a static file (`scripts/update-tiles.sh` builds it from
+Protomaps' daily OSM-derived planet build and uploads it to the VM,
+alongside `ericdoo-infra`, not part of this repo's own deploy -- see that
+script and `ericdoo-infra`'s Caddyfile for the `/costcogas/tiles/*` route
+it's served from). Re-run it occasionally; OSM data changes slowly enough
+that this isn't on any schedule.
+
 ## Develop
 
 ```sh
@@ -47,6 +59,14 @@ cd ../web && bun install && bun run dev
 Dependencies for both `api` (uv, `pyproject.toml`/`uv.lock`) and `web` (bun,
 `bunfig.toml`) refuse to resolve any package version published less than 14
 days ago -- same supply-chain policy, same reasoning, in both.
+
+`bun run dev` talks to a local `api` (above) by default and pulls basemap
+tiles from the production URL (see `web/src/lib/tiles.ts` -- that route is
+public and CORS-open, so this needs nothing local). Override either for a
+one-off: `VITE_API_PROXY_TARGET=https://ericdoo.com bun run dev` to skip
+running a local API/DB entirely, or `VITE_TILES_URL=http://localhost:8090/
+bun run dev` to test against tiles served locally instead (e.g. via a
+scratch static server, or a local `scripts/update-tiles.sh` output).
 
 ## Deploy
 

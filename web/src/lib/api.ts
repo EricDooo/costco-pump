@@ -51,7 +51,12 @@ export interface StatsSummary {
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`)
+  // no-store: this is live price data (and the API already sets its own
+  // short server-side cache, see app/cache.py's stations/stats caching) --
+  // a browser-level HTTP cache serving an even-staler copy on top of that
+  // has no upside, and did happen in practice serving a years-old dev
+  // response after a local proxy target change.
+  const res = await fetch(`${API_BASE}${path}`, { cache: 'no-store' })
   if (!res.ok) throw new Error(`${path} failed: ${res.status}`)
   return res.json() as Promise<T>
 }

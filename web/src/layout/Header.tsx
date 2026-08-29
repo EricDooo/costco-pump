@@ -3,7 +3,8 @@ import { useTheme } from '../hooks/useTheme'
 import { cn } from '../lib/cn'
 
 const tabs = [
-  { to: '/', label: 'Dashboard', end: true },
+  { to: '/', label: 'Map', end: true },
+  { to: '/stations', label: 'Stations' },
   { to: '/about', label: 'About' },
 ]
 

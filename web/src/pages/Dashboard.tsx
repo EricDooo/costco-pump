@@ -30,10 +30,11 @@ export function Dashboard() {
 
   return (
     <div className="mx-auto max-w-content px-6 py-12">
-      <h1 className="text-2xl font-bold text-foreground">Costco Gas Tracker</h1>
+      <h1 className="text-2xl font-bold text-foreground">All Stations</h1>
       <p className="mt-2 max-w-2xl text-sm text-muted">
-        Every US Costco with a gas station, swept and re-checked on a schedule, so you
-        can see how prices at any warehouse have actually moved over time.
+        Every tracked Costco with a gas station, searchable by warehouse, city, state,
+        or zip. See the <Link to="/" className="text-primary hover:underline">map</Link> for
+        a geographic view.
       </p>
 
       {error && <p className="mt-8 text-sm text-negative">{error}</p>}
