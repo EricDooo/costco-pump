@@ -3,6 +3,7 @@ import type { FeatureCollection, Point } from 'geojson'
 import {
   Map as MaplibreMap,
   NavigationControl,
+  Popup,
   type GeoJSONSource,
   type MapLayerMouseEvent,
   type StyleSpecification,
@@ -115,6 +116,22 @@ function registerPillImages(map: MaplibreMap) {
   })
 }
 
+/** The hover tooltip's content -- name bold, address/city/state muted below. */
+function buildHoverContent(props: { name: string; address: string; city: string; state: string; zip_code: string }): HTMLElement {
+  const el = document.createElement('div')
+  el.style.font = '12px sans-serif'
+  const name = document.createElement('div')
+  name.style.fontWeight = '600'
+  name.style.color = 'var(--foreground)'
+  name.textContent = props.name
+  const address = document.createElement('div')
+  address.style.color = 'var(--muted)'
+  address.style.marginTop = '2px'
+  address.textContent = `${props.address}, ${props.city}, ${props.state} ${props.zip_code}`.trim()
+  el.append(name, address)
+  return el
+}
+
 function resolvedFlavorName(theme: 'light' | 'dark' | 'system'): 'light' | 'dark' {
   const dark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
   return dark ? 'dark' : 'light'
@@ -157,8 +174,10 @@ function toFeatureCollection(stations: StationSummary[]): FeatureCollection<Poin
           properties: {
             id: s.id,
             name: s.name,
+            address: s.address,
             city: s.city,
             state: s.state,
+            zip_code: s.zip_code,
             regular_price: s.regular_price,
             price_ratio: priceRatio,
           },
@@ -489,6 +508,19 @@ export function GasMap({ stations, tilesFile, center, zoom, groupByState, onStat
         map.getCanvas().style.cursor = ''
       })
     }
+
+    // Name + address on hover -- closeButton/closeOnClick both off since
+    // this follows the cursor rather than being dismissed by the user.
+    const hoverPopup = new Popup({ closeButton: false, closeOnClick: false, offset: 12 })
+    map.on('mousemove', 'unclustered-point', (e: MapLayerMouseEvent) => {
+      const feature = e.features?.[0]
+      if (!feature) return
+      const p = feature.properties as { name: string; address: string; city: string; state: string; zip_code: string }
+      hoverPopup.setLngLat(e.lngLat).setDOMContent(buildHoverContent(p)).addTo(map)
+    })
+    map.on('mouseleave', 'unclustered-point', () => {
+      hoverPopup.remove()
+    })
 
     return () => map.remove()
     // center/zoom are just the initial camera; a region change already

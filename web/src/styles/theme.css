@@ -98,3 +98,27 @@ body {
   background: var(--border);
   border-radius: 3px;
 }
+
+/* MapLibre's default popup chrome is a hardcoded white box -- theme it to
+   match the map's own hover tooltip (GasMap.tsx). Doubled-up selectors
+   (not just .maplibregl-popup-content) so this reliably outranks
+   maplibre-gl.css's own same-specificity rule regardless of which CSS
+   chunk loads later -- GasMap is lazy-loaded, so load order isn't fixed. */
+.maplibregl-popup.maplibregl-popup .maplibregl-popup-content {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: none;
+  padding: 8px 10px;
+}
+.maplibregl-popup.maplibregl-popup.maplibregl-popup-anchor-top .maplibregl-popup-tip {
+  border-bottom-color: var(--surface);
+}
+.maplibregl-popup.maplibregl-popup.maplibregl-popup-anchor-bottom .maplibregl-popup-tip {
+  border-top-color: var(--surface);
+}
+.maplibregl-popup.maplibregl-popup.maplibregl-popup-anchor-left .maplibregl-popup-tip {
+  border-right-color: var(--surface);
+}
+.maplibregl-popup.maplibregl-popup.maplibregl-popup-anchor-right .maplibregl-popup-tip {
+  border-left-color: var(--surface);
+}

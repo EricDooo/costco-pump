@@ -312,12 +312,17 @@ export function StationDetailContent({
             ))}
           </div>
         </div>
-        {!detail ? (
-          <p className="mt-3 text-sm text-muted">Loading...</p>
-        ) : chartData.length < 2 ? (
-          <p className="mt-3 text-sm text-muted">Not enough history yet to chart a trend.</p>
-        ) : (
-          <div className="mt-2 h-48 w-full">
+        {/* Fixed height regardless of state -- Loading/empty/chart having
+            different heights was shifting the whole card (and its own
+            range buttons) under the cursor on every click. */}
+        <div className="mt-2 h-48 w-full">
+          {!detail ? (
+            <div className="flex h-full items-center justify-center text-sm text-muted">Loading...</div>
+          ) : chartData.length < 2 ? (
+            <div className="flex h-full items-center justify-center text-center text-sm text-muted">
+              Not enough history yet to chart a trend.
+            </div>
+          ) : (
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartData} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
                 <defs>
@@ -367,8 +372,8 @@ export function StationDetailContent({
                 />
               </AreaChart>
             </ResponsiveContainer>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {sevenDayChange && (sevenDayChange.regular !== null || sevenDayChange.premium !== null) && (
