@@ -275,7 +275,7 @@ export function StationDetailContent({
       {changes.length > 0 && (
         <div>
           <div className="text-xs font-medium text-muted">Recorded changes</div>
-          <div className="mt-2 max-h-48 overflow-y-auto">
+          <div className="scrollbar-thin mt-2 max-h-48 overflow-y-auto">
             <table className="w-full text-xs">
               <thead>
                 <tr className="text-left text-muted">

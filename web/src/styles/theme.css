@@ -81,3 +81,20 @@ body {
   color: var(--color-foreground);
   font-family: var(--font-sans);
 }
+
+/* Thin, blends-in scrollbar for internally-scrolling panels (the map
+   sidebar) -- the default OS scrollbar reads as a UI element of its own. */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}

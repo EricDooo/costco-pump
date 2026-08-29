@@ -121,7 +121,7 @@ export function MapView() {
       {/* Full-bleed below this point -- a map wants the width. */}
       <div className="flex min-h-0 flex-1 flex-col gap-4 px-4 pb-4 sm:px-6 lg:flex-row lg:items-stretch">
         {/* min-h-0: lets this scroll internally instead of growing the page. */}
-        <aside className="flex min-h-0 max-h-[40vh] flex-shrink-0 flex-col gap-6 overflow-y-auto lg:max-h-none lg:w-[26vw] lg:min-w-[340px] lg:max-w-[420px]">
+        <aside className="scrollbar-thin flex min-h-0 max-h-[40vh] flex-shrink-0 flex-col gap-6 overflow-y-auto lg:max-h-none lg:w-[26vw] lg:min-w-[340px] lg:max-w-[420px]">
           <Sidebar
             region={region}
             regionId={regionId}
@@ -140,6 +140,7 @@ export function MapView() {
               tilesFile={region.tilesFile}
               center={region.center}
               zoom={region.zoom}
+              groupByState={region.showStateBreakdown}
               onStationClick={openStation}
             />
           )}
