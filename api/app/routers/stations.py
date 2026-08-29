@@ -101,6 +101,12 @@ async def get_station(
         diesel_price=float(latest.diesel_price) if latest and latest.diesel_price is not None else None,
         as_of=latest.time if latest else None,
         hours=wh.hours,
+        gas_hours=wh.gas_hours,
+        opened_date=wh.opened_date,
+        phone=wh.phone,
+        services=wh.services,
+        programs=wh.programs,
+        department_phones=wh.department_phones,
         history=[
             PricePoint(
                 time=r.time,

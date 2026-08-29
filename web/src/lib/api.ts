@@ -25,9 +25,21 @@ export interface PricePoint {
   diesel_price: number | null
 }
 
+export interface DepartmentPhone {
+  name: string
+  phone: string
+}
+
 export interface StationDetailData extends StationSummary {
   history: PricePoint[]
   hours: string[] | null
+  /** Only populated for US/CA/UK -- international warehouses don't expose these. */
+  gas_hours: string[] | null
+  opened_date: string | null
+  phone: string | null
+  services: string[] | null
+  programs: string[] | null
+  department_phones: DepartmentPhone[] | null
 }
 
 export interface StateStat {

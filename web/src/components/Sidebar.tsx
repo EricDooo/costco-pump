@@ -19,6 +19,7 @@ export function Sidebar({
   regionId,
   summary,
   stateBreakdown,
+  regionStations,
   selectedStation,
   onCloseStation,
 }: {
@@ -26,13 +27,14 @@ export function Sidebar({
   regionId: RegionId
   summary: RegionSummary | null
   stateBreakdown: StateStat[]
+  regionStations: StationSummary[]
   selectedStation: StationSummary | null
   onCloseStation: () => void
 }) {
   if (selectedStation) {
     return (
       <div className="rounded-lg border border-border bg-surface p-4">
-        <StationPanel station={selectedStation} regionMedian={summary?.median ?? null} onClose={onCloseStation} />
+        <StationPanel station={selectedStation} regionStations={regionStations} onClose={onCloseStation} />
       </div>
     )
   }

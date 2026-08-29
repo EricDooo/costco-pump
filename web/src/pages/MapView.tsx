@@ -127,6 +127,7 @@ export function MapView() {
             regionId={regionId}
             summary={summary}
             stateBreakdown={stateBreakdown}
+            regionStations={regionStations}
             selectedStation={selectedStation}
             onCloseStation={closeStation}
           />

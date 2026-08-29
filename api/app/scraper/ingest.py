@@ -43,23 +43,31 @@ def _price(raw: dict, *keys: str) -> float | None:
         return None
 
 
-def _hours(raw: dict) -> list[str] | None:
-    """Pull warehouse hours out of the same locator record that carries
-    location -- no separate lookup, no cost (prices are the one field that
-    comes from a separate call now; see scraper/client.py). Costco's locator
-    shows hours as separate blocks (regular vs. senior/holiday); we keep it
-    as a flat list of display strings rather than guessing at a stricter
-    schema, same spirit as the price field matching above.
+def _hours(raw: dict, *keys: str) -> list[str] | None:
+    """Pull hours out of the same locator record that carries location --
+    no separate lookup, no cost. Accepts a flat list of display strings
+    (what scraper/client.py's own hours/gasHours already produce) or, for
+    a raw/unnormalized shape, a list of {day, hours}-ish dicts or a
+    newline-delimited string.
     """
-    value = _first(raw, "warehouseHours", "hours", "regularHours", "hoursOfOperation")
+    value = _first(raw, *keys)
     if value is None:
         return None
     if isinstance(value, list):
-        # Accept either plain strings or {day, hours}-shaped dicts.
         return [v if isinstance(v, str) else " ".join(str(x) for x in v.values()) for v in value]
     if isinstance(value, str):
         return [line.strip() for line in value.splitlines() if line.strip()]
     return None
+
+
+def _date(raw: dict, *keys: str) -> dt.date | None:
+    value = _first(raw, *keys)
+    if not value:
+        return None
+    try:
+        return dt.date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
 
 
 def parse_warehouse(raw: dict) -> dict | None:
@@ -80,7 +88,16 @@ def parse_warehouse(raw: dict) -> dict | None:
         "regular_price": _price(raw, "regularPrice", "regGasPrice", "unlead87"),
         "premium_price": _price(raw, "premiumPrice", "premGasPrice", "unlead91"),
         "diesel_price": _price(raw, "dieselPrice", "diesel"),
-        "hours": _hours(raw),
+        "hours": _hours(raw, "warehouseHours", "hours", "regularHours", "hoursOfOperation"),
+        # Only available from client.py's US/CA/UK path -- international.py
+        # (a different platform entirely) doesn't provide these, so they're
+        # just None there, same as any other field it lacks.
+        "gas_hours": _hours(raw, "gasHours"),
+        "opened_date": _date(raw, "openingDate"),
+        "phone": _first(raw, "phone"),
+        "services": _first(raw, "services"),
+        "programs": _first(raw, "programs"),
+        "department_phones": _first(raw, "departmentPhones"),
     }
 
 
@@ -114,6 +131,12 @@ async def upsert_warehouse_metadata(session: AsyncSession, row: dict, batch_time
                 "lon": row["lon"],
                 "geom": geom,
                 "hours": row["hours"],
+                "gas_hours": row["gas_hours"],
+                "opened_date": row["opened_date"],
+                "phone": row["phone"],
+                "services": row["services"],
+                "programs": row["programs"],
+                "department_phones": row["department_phones"],
                 "updated_at": batch_time,
             },
         )
@@ -146,6 +169,12 @@ async def upsert_warehouse_and_reading(session: AsyncSession, row: dict, batch_t
                 "lon": row["lon"],
                 "geom": geom,
                 "hours": row["hours"],
+                "gas_hours": row["gas_hours"],
+                "opened_date": row["opened_date"],
+                "phone": row["phone"],
+                "services": row["services"],
+                "programs": row["programs"],
+                "department_phones": row["department_phones"],
                 "updated_at": batch_time,
             },
         )

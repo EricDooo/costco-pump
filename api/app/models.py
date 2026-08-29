@@ -25,6 +25,15 @@ class Warehouse(Base):
     # free from the same sweep response as prices (see scraper/ingest.py's
     # _hours()), refreshed every sweep alongside everything else.
     hours: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    # The rest of these: only populated for US/CA/UK (scraper/client.py) --
+    # international.py's platform doesn't expose them, so they're just None
+    # there, same as any other field it lacks.
+    gas_hours: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    opened_date: Mapped[dt.date | None] = mapped_column(nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    services: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    programs: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    department_phones: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

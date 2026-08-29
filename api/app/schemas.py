@@ -27,9 +27,20 @@ class PricePoint(BaseModel):
     diesel_price: float | None
 
 
+class DepartmentPhone(BaseModel):
+    name: str
+    phone: str
+
+
 class StationDetail(StationSummary):
     history: list[PricePoint]
     hours: list[str] | None
+    gas_hours: list[str] | None
+    opened_date: dt.date | None
+    phone: str | None
+    services: list[str] | None
+    programs: list[str] | None
+    department_phones: list[DepartmentPhone] | None
 
 
 class StateStat(BaseModel):

@@ -1,9 +1,48 @@
 import { useMemo, useState } from 'react'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import type { PricePoint, StationDetailData, StationSummary } from '../lib/api'
+import type { PriceComparison, PriceComparisons } from '../lib/priceComparisons'
 
 function formatPrice(price: number | null): string {
   return price === null ? '--' : `$${price.toFixed(2)}`
+}
+
+function ordinal(n: number): string {
+  const suffixes = ['th', 'st', 'nd', 'rd']
+  const v = n % 100
+  return `${n}${suffixes[(v - 20) % 10] ?? suffixes[v] ?? suffixes[0]}`
+}
+
+function rankLabel(rank: number, count: number): string {
+  if (count === 1) return 'Only one tracked'
+  if (rank === 1) return `Priciest of ${count}`
+  if (rank === count) return `Cheapest of ${count}`
+  return `${ordinal(rank)} priciest of ${count}`
+}
+
+/** One row of the price-comparison card -- a gradient bar (cheap to
+ * pricey) with a marker at this station's own price. */
+function PriceRankBar({ label, price, stats }: { label: string; price: number; stats: PriceComparison }) {
+  const pct = stats.max > stats.min ? ((price - stats.min) / (stats.max - stats.min)) * 100 : 50
+  return (
+    <div>
+      <div className="flex items-baseline justify-between">
+        <span className="text-[10px] font-medium tracking-wide text-muted uppercase">{label}</span>
+        <span className="text-xs font-semibold text-foreground">{rankLabel(stats.rank, stats.count)}</span>
+      </div>
+      <div className="relative mt-2 h-1.5 rounded-full bg-gradient-to-r from-blue-500 via-purple-700 to-red-500">
+        <div
+          className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-foreground shadow"
+          style={{ left: `${pct}%` }}
+        />
+      </div>
+      <div className="mt-1.5 flex justify-between text-[11px] text-muted">
+        <span>{formatPrice(stats.min)}</span>
+        <span>avg {formatPrice(stats.avg)}</span>
+        <span>{formatPrice(stats.max)}</span>
+      </div>
+    </div>
+  )
 }
 
 function formatRelative(iso: string | null): string {
@@ -66,6 +105,34 @@ function deriveChanges(history: PricePoint[]): ChangeEvent[] {
   return events.reverse()
 }
 
+function HoursList({ label, lines }: { label: string; lines: string[] }) {
+  return (
+    <div>
+      <div className="text-xs font-medium text-muted">{label}</div>
+      <ul className="mt-2 space-y-0.5 text-xs text-muted">
+        {lines.map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+function TagList({ label, tags }: { label: string; tags: string[] }) {
+  return (
+    <div>
+      <div className="text-xs font-medium text-muted">{label}</div>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {tags.map((t) => (
+          <span key={t} className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted">
+            {t}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function ChangeCell({ value, up }: { value: number | null; up: boolean | undefined }) {
   if (value === null) return <span className="text-muted">--</span>
   if (up === undefined) return <span className="text-muted">{formatPrice(value)}</span>
@@ -81,13 +148,14 @@ function ChangeCell({ value, up }: { value: number | null; up: boolean | undefin
 export function StationDetailContent({
   station,
   detail,
-  regionMedian,
+  comparisons,
 }: {
   /** Already-loaded summary fields, rendered before `detail` arrives. */
   station: StationSummary
   /** History/hours -- null while in flight; sections below wait on it. */
   detail: StationDetailData | null
-  regionMedian: number | null
+  /** Null while the peer station list (for ranking) hasn't loaded yet. */
+  comparisons: PriceComparisons | null
 }) {
   const [rangeDays, setRangeDays] = useState(7)
 
@@ -117,8 +185,10 @@ export function StationDetailContent({
     }
   }, [detail])
 
-  const vsMedian =
-    regionMedian && station.regular_price !== null ? ((station.regular_price - regionMedian) / regionMedian) * 100 : null
+  // hours mixes Business-Center-early-access blocks ("Business Mon-Fri: ...")
+  // in with the actual warehouse hours ("Mon-Fri: ...") -- drop the former,
+  // gas_hours already covers the fuel-relevant hours on its own.
+  const warehouseHours = useMemo(() => detail?.hours?.filter((line) => !line.startsWith('Business ')) ?? null, [detail])
 
   return (
     <div className="space-y-4">
@@ -136,14 +206,6 @@ export function StationDetailContent({
           <span className="rounded-full border border-border px-2 py-0.5 text-muted">
             Refreshed {formatRelative(station.as_of)}
           </span>
-          {vsMedian !== null && (
-            <span
-              className={`rounded-full px-2 py-0.5 font-medium ${vsMedian >= 0 ? 'bg-negative/10 text-negative' : 'bg-positive/10 text-positive'}`}
-            >
-              {vsMedian >= 0 ? '+' : ''}
-              {vsMedian.toFixed(1)}% vs regional median
-            </span>
-          )}
         </div>
       </div>
 
@@ -166,6 +228,16 @@ export function StationDetailContent({
         })}
       </div>
       <p className="-mt-3 text-xs text-muted">Always verify at the pump.</p>
+
+      {comparisons && station.regular_price !== null && (comparisons.national || comparisons.state || comparisons.nearby) && (
+        <div className="space-y-3 rounded-lg border border-border bg-surface p-3">
+          {comparisons.national && <PriceRankBar label="Nationwide" price={station.regular_price} stats={comparisons.national} />}
+          {comparisons.state && (
+            <PriceRankBar label={`In ${station.state}`} price={station.regular_price} stats={comparisons.state} />
+          )}
+          {comparisons.nearby && <PriceRankBar label="Within 25 miles" price={station.regular_price} stats={comparisons.nearby} />}
+        </div>
+      )}
 
       <div>
         <div className="flex items-center justify-between">
@@ -309,12 +381,47 @@ export function StationDetailContent({
         </div>
       )}
 
-      {detail?.hours && (
+      {detail?.gas_hours && detail.gas_hours.length > 0 && <HoursList label="Gas station hours" lines={detail.gas_hours} />}
+      {warehouseHours && warehouseHours.length > 0 && <HoursList label="Warehouse hours" lines={warehouseHours} />}
+
+      {(detail?.opened_date || detail?.phone) && (
         <div>
-          <div className="text-xs font-medium text-muted">Hours</div>
-          <ul className="mt-2 space-y-0.5 text-xs text-muted">
-            {detail.hours.map((line) => (
-              <li key={line}>{line}</li>
+          <div className="text-xs font-medium text-muted">Quick facts</div>
+          <dl className="mt-2 space-y-1 text-xs">
+            {detail?.opened_date && (
+              <div className="flex justify-between">
+                <dt className="text-muted">Opened</dt>
+                <dd className="text-foreground">
+                  {new Date(detail.opened_date).toLocaleDateString(undefined, {
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric',
+                  })}
+                </dd>
+              </div>
+            )}
+            {detail?.phone && (
+              <div className="flex justify-between">
+                <dt className="text-muted">Phone</dt>
+                <dd className="text-foreground">{detail.phone}</dd>
+              </div>
+            )}
+          </dl>
+        </div>
+      )}
+
+      {detail?.services && detail.services.length > 0 && <TagList label="Services" tags={detail.services} />}
+      {detail?.programs && detail.programs.length > 0 && <TagList label="Departments & programs" tags={detail.programs} />}
+
+      {detail?.department_phones && detail.department_phones.length > 0 && (
+        <div>
+          <div className="text-xs font-medium text-muted">Department phones</div>
+          <ul className="mt-2 space-y-1 text-xs">
+            {detail.department_phones.map((d) => (
+              <li key={d.name} className="flex justify-between">
+                <span className="text-muted">{d.name}</span>
+                <span className="text-foreground">{d.phone}</span>
+              </li>
             ))}
           </ul>
         </div>

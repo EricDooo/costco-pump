@@ -98,15 +98,45 @@ def _has_gas(warehouse: dict) -> bool:
     return any(s.get("code") == "gas" for s in warehouse.get("services") or [])
 
 
-def _format_hours(warehouse: dict) -> list[str] | None:
-    entries = warehouse.get("hours") or []
+def _format_hours(entries: list[dict]) -> list[str] | None:
     lines = []
-    for h in entries:
+    for h in entries or []:
         title = (h.get("title") or [{}])[0].get("value", "")
         open_, close = h.get("open"), h.get("close")
         if title and open_ and close:
             lines.append(f"{title}: {open_}-{close}")
     return lines or None
+
+
+# warehouse.services[] mixes real departments (gas, food, pharmacy, ...)
+# with generic "specialty_item" entries (Bakery, Fresh Deli, membership
+# programs, kiosks) -- split those into two display lists rather than one
+# undifferentiated dump.
+def _services_and_programs(warehouse: dict) -> tuple[list[str] | None, list[str] | None]:
+    services: list[str] = []
+    programs: list[str] = []
+    for svc in warehouse.get("services") or []:
+        name = (svc.get("name") or [{}])[0].get("value")
+        if not name:
+            continue
+        (programs if svc.get("code") == "specialty_item" else services).append(name)
+    return services or None, programs or None
+
+
+def _department_phones(warehouse: dict) -> list[dict[str, str]] | None:
+    phones = [
+        {"name": name, "phone": svc["phone"]}
+        for svc in warehouse.get("services") or []
+        if svc.get("phone") and (name := (svc.get("name") or [{}])[0].get("value"))
+    ]
+    return phones or None
+
+
+def _gas_hours(warehouse: dict) -> list[str] | None:
+    for svc in warehouse.get("services") or []:
+        if svc.get("code") == "gas":
+            return _format_hours(svc.get("hours"))
+    return None
 
 
 def _normalize(warehouse: dict, prices: dict[str, dict]) -> dict:
@@ -118,6 +148,7 @@ def _normalize(warehouse: dict, prices: dict[str, dict]) -> dict:
     wid = str(warehouse.get("warehouseId") or "")
     price = prices.get(wid) or {}
     name: list[dict[str, Any]] = warehouse.get("name") or []
+    services, programs = _services_and_programs(warehouse)
     return {
         "warehouseNo": wid,
         "warehouseName": (name[0].get("value") if name else None) or f"Costco #{wid}",
@@ -130,7 +161,13 @@ def _normalize(warehouse: dict, prices: dict[str, dict]) -> dict:
         "regularPrice": price.get("regular"),
         "premiumPrice": price.get("premium"),
         "dieselPrice": price.get("diesel"),
-        "hours": _format_hours(warehouse),
+        "hours": _format_hours(warehouse.get("hours")),
+        "gasHours": _gas_hours(warehouse),
+        "openingDate": warehouse.get("openingDate"),
+        "phone": warehouse.get("phone"),
+        "services": services,
+        "programs": programs,
+        "departmentPhones": _department_phones(warehouse),
     }
 
 
