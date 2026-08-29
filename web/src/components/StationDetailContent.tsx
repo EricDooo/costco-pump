@@ -7,6 +7,55 @@ function formatPrice(price: number | null): string {
   return price === null ? '--' : `$${price.toFixed(2)}`
 }
 
+// Every section below the price cards is its own bordered card, same
+// treatment as the price-comparison card.
+const SECTION_CARD = 'rounded-lg border border-border bg-surface p-3'
+
+// The API's hours lines look like "Mon-Fri: 10:00:00-20:30:00" -- expand
+// each into one row per day, 12-hour clock, to match how every other gas
+// station site displays hours.
+const DAY_ORDER = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const DAY_FULL: Record<string, string> = {
+  Sun: 'Sunday',
+  Mon: 'Monday',
+  Tue: 'Tuesday',
+  Wed: 'Wednesday',
+  Thu: 'Thursday',
+  Fri: 'Friday',
+  Sat: 'Saturday',
+}
+
+function formatClock(hhmmss: string): string {
+  const [h = '0', m = '0'] = hhmmss.split(':')
+  const hour24 = Number(h)
+  const minute = Number(m)
+  const period = hour24 >= 12 ? 'PM' : 'AM'
+  const hour12 = hour24 % 12 || 12
+  return minute === 0 ? `${hour12}${period}` : `${hour12}:${String(minute).padStart(2, '0')}${period}`
+}
+
+interface DayHours {
+  day: string
+  range: string
+}
+
+function expandHoursLines(lines: string[]): DayHours[] {
+  const days: DayHours[] = []
+  for (const line of lines) {
+    const match = /^([A-Za-z]{3})(?:-([A-Za-z]{3}))?:\s*(\d{2}:\d{2}:\d{2})-(\d{2}:\d{2}:\d{2})$/.exec(line)
+    if (!match) continue
+    const [, startAbbr, endAbbr, open, close] = match as unknown as [string, string, string | undefined, string, string]
+    const range = `${formatClock(open)}–${formatClock(close)}`
+    const startIdx = DAY_ORDER.indexOf(startAbbr)
+    const endIdx = endAbbr ? DAY_ORDER.indexOf(endAbbr) : startIdx
+    if (startIdx === -1 || endIdx === -1) continue
+    for (let i = startIdx; i <= endIdx; i++) {
+      days.push({ day: DAY_FULL[DAY_ORDER[i]!]!, range })
+    }
+  }
+  return days
+}
+
 function ordinal(n: number): string {
   const suffixes = ['th', 'st', 'nd', 'rd']
   const v = n % 100
@@ -106,12 +155,16 @@ function deriveChanges(history: PricePoint[]): ChangeEvent[] {
 }
 
 function HoursList({ label, lines }: { label: string; lines: string[] }) {
+  const days = expandHoursLines(lines)
   return (
-    <div>
+    <div className={SECTION_CARD}>
       <div className="text-xs font-medium text-muted">{label}</div>
-      <ul className="mt-2 space-y-0.5 text-xs text-muted">
-        {lines.map((line) => (
-          <li key={line}>{line}</li>
+      <ul className="mt-2 divide-y divide-border overflow-hidden rounded-md border border-border text-xs">
+        {days.map((d, i) => (
+          <li key={`${d.day}-${i}`} className="flex items-center justify-between px-2 py-1.5">
+            <span className="font-medium text-foreground">{d.day}</span>
+            <span className="text-muted">{d.range}</span>
+          </li>
         ))}
       </ul>
     </div>
@@ -120,7 +173,7 @@ function HoursList({ label, lines }: { label: string; lines: string[] }) {
 
 function TagList({ label, tags }: { label: string; tags: string[] }) {
   return (
-    <div>
+    <div className={SECTION_CARD}>
       <div className="text-xs font-medium text-muted">{label}</div>
       <div className="mt-2 flex flex-wrap gap-1.5">
         {tags.map((t) => (
@@ -239,7 +292,7 @@ export function StationDetailContent({
         </div>
       )}
 
-      <div>
+      <div className={SECTION_CARD}>
         <div className="flex items-center justify-between">
           <div className="text-xs font-medium text-muted">Price history</div>
           <div className="flex gap-1">
@@ -319,7 +372,7 @@ export function StationDetailContent({
       </div>
 
       {sevenDayChange && (sevenDayChange.regular !== null || sevenDayChange.premium !== null) && (
-        <div>
+        <div className={SECTION_CARD}>
           <div className="text-xs font-medium text-muted">7-day change</div>
           <div className="mt-2 space-y-1 text-sm">
             {sevenDayChange.regular !== null && (
@@ -345,7 +398,7 @@ export function StationDetailContent({
       )}
 
       {changes.length > 0 && (
-        <div>
+        <div className={SECTION_CARD}>
           <div className="text-xs font-medium text-muted">Recorded changes</div>
           <div className="scrollbar-thin mt-2 max-h-48 overflow-y-auto">
             <table className="w-full text-xs">
@@ -385,7 +438,7 @@ export function StationDetailContent({
       {warehouseHours && warehouseHours.length > 0 && <HoursList label="Warehouse hours" lines={warehouseHours} />}
 
       {(detail?.opened_date || detail?.phone) && (
-        <div>
+        <div className={SECTION_CARD}>
           <div className="text-xs font-medium text-muted">Quick facts</div>
           <dl className="mt-2 space-y-1 text-xs">
             {detail?.opened_date && (
@@ -414,7 +467,7 @@ export function StationDetailContent({
       {detail?.programs && detail.programs.length > 0 && <TagList label="Departments & programs" tags={detail.programs} />}
 
       {detail?.department_phones && detail.department_phones.length > 0 && (
-        <div>
+        <div className={SECTION_CARD}>
           <div className="text-xs font-medium text-muted">Department phones</div>
           <ul className="mt-2 space-y-1 text-xs">
             {detail.department_phones.map((d) => (
