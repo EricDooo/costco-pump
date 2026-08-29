@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { api, type PricePoint, type StationDetailData } from '../lib/api'
+import { api, type PricePoint, type StationDetailData, type StationSummary } from '../lib/api'
 
 function formatPrice(price: number | null): string {
   return price === null ? '--' : `$${price.toFixed(2)}`
@@ -71,57 +71,66 @@ function ChangeCell({ value, up }: { value: number | null; up: boolean | undefin
 }
 
 export function StationPanel({
-  stationId,
+  station: initial,
   regionMedian,
   onClose,
 }: {
-  stationId: number
+  /** The already-loaded summary row for this station (from the region's
+   * station list) -- rendered immediately so opening the panel never shows
+   * a blank "Loading..." flash for anything we already have in memory.
+   * Only the history-derived sections (chart, 7-day change, recorded
+   * changes) need the extra fetch below, and each shows its own small
+   * loading state rather than blocking the whole panel. */
+  station: StationSummary
   regionMedian: number | null
   onClose: () => void
 }) {
-  const [station, setStation] = useState<StationDetailData | null>(null)
+  const [detail, setDetail] = useState<StationDetailData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [rangeDays, setRangeDays] = useState(7)
 
   useEffect(() => {
-    setStation(null)
+    setDetail(null)
     setError(null)
     api
-      .station(stationId)
-      .then(setStation)
-      .catch(() => setError('Could not load this station right now.'))
-  }, [stationId])
+      .station(initial.id)
+      .then(setDetail)
+      .catch(() => setError('Could not load price history for this station right now.'))
+  }, [initial.id])
+
+  // detail (once loaded) has the same fields as initial plus history/hours,
+  // and reflects a fresher fetch -- prefer it, but there's nothing to wait
+  // on for the fields both share.
+  const current = detail ?? initial
 
   const chartData = useMemo(() => {
-    if (!station) return []
+    if (!detail) return []
     const cutoff = Date.now() - rangeDays * 24 * 60 * 60 * 1000
-    return station.history
+    return detail.history
       .filter((p) => new Date(p.time).getTime() >= cutoff)
       .map((p) => ({
         time: new Date(p.time).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric' }),
         regular: p.regular_price,
         premium: p.premium_price,
       }))
-  }, [station, rangeDays])
+  }, [detail, rangeDays])
 
-  const changes = useMemo(() => (station ? deriveChanges(station.history).slice(0, 12) : []), [station])
+  const changes = useMemo(() => (detail ? deriveChanges(detail.history).slice(0, 12) : []), [detail])
 
   const sevenDayChange = useMemo(() => {
-    if (!station) return null
+    if (!detail) return null
     const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000
-    const inWindow = station.history.filter((p) => new Date(p.time).getTime() >= cutoff)
+    const inWindow = detail.history.filter((p) => new Date(p.time).getTime() >= cutoff)
     const first = inWindow[0]
     if (!first) return null
     return {
-      regular: first.regular_price !== null && station.regular_price !== null ? station.regular_price - first.regular_price : null,
-      premium: first.premium_price !== null && station.premium_price !== null ? station.premium_price - first.premium_price : null,
+      regular: first.regular_price !== null && detail.regular_price !== null ? detail.regular_price - first.regular_price : null,
+      premium: first.premium_price !== null && detail.premium_price !== null ? detail.premium_price - first.premium_price : null,
     }
-  }, [station])
+  }, [detail])
 
   const vsMedian =
-    station && regionMedian && station.regular_price !== null
-      ? ((station.regular_price - regionMedian) / regionMedian) * 100
-      : null
+    regionMedian && current.regular_price !== null ? ((current.regular_price - regionMedian) / regionMedian) * 100 : null
 
   return (
     <div className="space-y-4">
@@ -129,174 +138,173 @@ export function StationPanel({
         &larr; Back
       </button>
 
+      <div>
+        <div className="flex items-start justify-between">
+          <h2 className="text-lg font-bold text-foreground">{current.name}</h2>
+          <span className="text-xs text-muted">#{current.id}</span>
+        </div>
+        <p className="mt-1 text-sm text-muted">
+          {current.address}
+          <br />
+          {current.city}, {current.state} {current.zip_code}
+        </p>
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <span className="rounded-full border border-border px-2 py-0.5 text-muted">
+            Updated {formatRelative(current.as_of)}
+          </span>
+          {vsMedian !== null && (
+            <span
+              className={`rounded-full px-2 py-0.5 font-medium ${vsMedian >= 0 ? 'bg-negative/10 text-negative' : 'bg-positive/10 text-positive'}`}
+            >
+              {vsMedian >= 0 ? '+' : ''}
+              {vsMedian.toFixed(1)}% vs regional median
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <div className="rounded-lg bg-blue-600 p-3 text-white">
+          <div className="text-xs opacity-80">Regular</div>
+          <div className="text-xl font-bold">{formatPrice(current.regular_price)}</div>
+        </div>
+        <div className="rounded-lg bg-red-600 p-3 text-white">
+          <div className="text-xs opacity-80">Premium</div>
+          <div className="text-xl font-bold">{formatPrice(current.premium_price)}</div>
+        </div>
+      </div>
+
       {error && <p className="text-sm text-negative">{error}</p>}
-      {!error && !station && <p className="text-sm text-muted">Loading...</p>}
 
-      {station && (
-        <>
-          <div>
-            <div className="flex items-start justify-between">
-              <h2 className="text-lg font-bold text-foreground">{station.name}</h2>
-              <span className="text-xs text-muted">#{station.id}</span>
-            </div>
-            <p className="mt-1 text-sm text-muted">
-              {station.address}
-              <br />
-              {station.city}, {station.state} {station.zip_code}
-            </p>
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-              <span className="rounded-full border border-border px-2 py-0.5 text-muted">
-                Updated {formatRelative(station.as_of)}
-              </span>
-              {vsMedian !== null && (
-                <span
-                  className={`rounded-full px-2 py-0.5 font-medium ${vsMedian >= 0 ? 'bg-negative/10 text-negative' : 'bg-positive/10 text-positive'}`}
+      {!error && (
+        <div>
+          <div className="flex items-center justify-between">
+            <div className="text-xs font-medium text-muted">Price history</div>
+            <div className="flex gap-1">
+              {RANGE_OPTIONS.map((opt) => (
+                <button
+                  key={opt.days}
+                  type="button"
+                  onClick={() => setRangeDays(opt.days)}
+                  className={`rounded-full px-2 py-0.5 text-xs ${
+                    rangeDays === opt.days
+                      ? 'bg-primary text-primary-foreground'
+                      : 'border border-border text-muted hover:text-foreground'
+                  }`}
                 >
-                  {vsMedian >= 0 ? '+' : ''}
-                  {vsMedian.toFixed(1)}% vs regional median
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {!detail ? (
+            <p className="mt-3 text-sm text-muted">Loading...</p>
+          ) : chartData.length < 2 ? (
+            <p className="mt-3 text-sm text-muted">Not enough history yet to chart a trend.</p>
+          ) : (
+            <div className="mt-2 h-48 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <XAxis dataKey="time" stroke="var(--muted)" fontSize={10} tickMargin={6} minTickGap={30} />
+                  <YAxis
+                    stroke="var(--muted)"
+                    fontSize={10}
+                    domain={['auto', 'auto']}
+                    tickFormatter={(v: number) => `$${v.toFixed(2)}`}
+                    width={44}
+                  />
+                  <Tooltip
+                    formatter={(value: number, name: string) => [`$${value.toFixed(2)}`, name]}
+                    contentStyle={{
+                      background: 'var(--surface)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      color: 'var(--foreground)',
+                      fontSize: 12,
+                    }}
+                  />
+                  <Line type="stepAfter" dataKey="regular" name="Regular" stroke="#2563eb" dot={false} strokeWidth={2} />
+                  <Line type="stepAfter" dataKey="premium" name="Premium" stroke="#dc2626" dot={false} strokeWidth={2} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </div>
+      )}
+
+      {sevenDayChange && (sevenDayChange.regular !== null || sevenDayChange.premium !== null) && (
+        <div>
+          <div className="text-xs font-medium text-muted">7-day change</div>
+          <div className="mt-2 space-y-1 text-sm">
+            {sevenDayChange.regular !== null && (
+              <div className="flex items-center justify-between">
+                <span className="text-foreground">Regular</span>
+                <span className={sevenDayChange.regular > 0 ? 'text-negative' : 'text-positive'}>
+                  {sevenDayChange.regular > 0 ? '+' : ''}
+                  {sevenDayChange.regular.toFixed(3)}
                 </span>
-              )}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
-            <div className="rounded-lg bg-blue-600 p-3 text-white">
-              <div className="text-xs opacity-80">Regular</div>
-              <div className="text-xl font-bold">{formatPrice(station.regular_price)}</div>
-            </div>
-            <div className="rounded-lg bg-red-600 p-3 text-white">
-              <div className="text-xs opacity-80">Premium</div>
-              <div className="text-xl font-bold">{formatPrice(station.premium_price)}</div>
-            </div>
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between">
-              <div className="text-xs font-medium text-muted">Price history</div>
-              <div className="flex gap-1">
-                {RANGE_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.days}
-                    type="button"
-                    onClick={() => setRangeDays(opt.days)}
-                    className={`rounded-full px-2 py-0.5 text-xs ${
-                      rangeDays === opt.days
-                        ? 'bg-primary text-primary-foreground'
-                        : 'border border-border text-muted hover:text-foreground'
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
               </div>
-            </div>
-            {chartData.length < 2 ? (
-              <p className="mt-3 text-sm text-muted">Not enough history yet to chart a trend.</p>
-            ) : (
-              <div className="mt-2 h-48 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={chartData} margin={{ left: 0, right: 8, top: 8, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                    <XAxis dataKey="time" stroke="var(--muted)" fontSize={10} tickMargin={6} minTickGap={30} />
-                    <YAxis
-                      stroke="var(--muted)"
-                      fontSize={10}
-                      domain={['auto', 'auto']}
-                      tickFormatter={(v: number) => `$${v.toFixed(2)}`}
-                      width={44}
-                    />
-                    <Tooltip
-                      formatter={(value: number, name: string) => [`$${value.toFixed(2)}`, name]}
-                      contentStyle={{
-                        background: 'var(--surface)',
-                        border: '1px solid var(--border)',
-                        borderRadius: 8,
-                        color: 'var(--foreground)',
-                        fontSize: 12,
-                      }}
-                    />
-                    <Line type="stepAfter" dataKey="regular" name="Regular" stroke="#2563eb" dot={false} strokeWidth={2} />
-                    <Line type="stepAfter" dataKey="premium" name="Premium" stroke="#dc2626" dot={false} strokeWidth={2} />
-                  </LineChart>
-                </ResponsiveContainer>
+            )}
+            {sevenDayChange.premium !== null && (
+              <div className="flex items-center justify-between">
+                <span className="text-foreground">Premium</span>
+                <span className={sevenDayChange.premium > 0 ? 'text-negative' : 'text-positive'}>
+                  {sevenDayChange.premium > 0 ? '+' : ''}
+                  {sevenDayChange.premium.toFixed(3)}
+                </span>
               </div>
             )}
           </div>
+        </div>
+      )}
 
-          {sevenDayChange && (sevenDayChange.regular !== null || sevenDayChange.premium !== null) && (
-            <div>
-              <div className="text-xs font-medium text-muted">7-day change</div>
-              <div className="mt-2 space-y-1 text-sm">
-                {sevenDayChange.regular !== null && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-foreground">Regular</span>
-                    <span className={sevenDayChange.regular > 0 ? 'text-negative' : 'text-positive'}>
-                      {sevenDayChange.regular > 0 ? '+' : ''}
-                      {sevenDayChange.regular.toFixed(3)}
-                    </span>
-                  </div>
-                )}
-                {sevenDayChange.premium !== null && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-foreground">Premium</span>
-                    <span className={sevenDayChange.premium > 0 ? 'text-negative' : 'text-positive'}>
-                      {sevenDayChange.premium > 0 ? '+' : ''}
-                      {sevenDayChange.premium.toFixed(3)}
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {changes.length > 0 && (
-            <div>
-              <div className="text-xs font-medium text-muted">Recorded changes</div>
-              <div className="mt-2 max-h-48 overflow-y-auto">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="text-left text-muted">
-                      <th className="pb-1 font-medium">Date</th>
-                      <th className="pb-1 text-right font-medium">Reg</th>
-                      <th className="pb-1 text-right font-medium">Prem</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {changes.map((c) => (
-                      <tr key={c.time} className="border-t border-border">
-                        <td className="py-1 text-muted">
-                          {new Date(c.time).toLocaleString(undefined, {
-                            month: 'short',
-                            day: 'numeric',
-                            hour: 'numeric',
-                            minute: '2-digit',
-                          })}
-                        </td>
-                        <td className="py-1 text-right">
-                          <ChangeCell value={c.regular} up={c.regularUp} />
-                        </td>
-                        <td className="py-1 text-right">
-                          <ChangeCell value={c.premium} up={c.premiumUp} />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {station.hours && (
-            <div>
-              <div className="text-xs font-medium text-muted">Hours</div>
-              <ul className="mt-2 space-y-0.5 text-xs text-muted">
-                {station.hours.map((line) => (
-                  <li key={line}>{line}</li>
+      {changes.length > 0 && (
+        <div>
+          <div className="text-xs font-medium text-muted">Recorded changes</div>
+          <div className="mt-2 max-h-48 overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-left text-muted">
+                  <th className="pb-1 font-medium">Date</th>
+                  <th className="pb-1 text-right font-medium">Reg</th>
+                  <th className="pb-1 text-right font-medium">Prem</th>
+                </tr>
+              </thead>
+              <tbody>
+                {changes.map((c) => (
+                  <tr key={c.time} className="border-t border-border">
+                    <td className="py-1 text-muted">
+                      {new Date(c.time).toLocaleString(undefined, {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: 'numeric',
+                        minute: '2-digit',
+                      })}
+                    </td>
+                    <td className="py-1 text-right">
+                      <ChangeCell value={c.regular} up={c.regularUp} />
+                    </td>
+                    <td className="py-1 text-right">
+                      <ChangeCell value={c.premium} up={c.premiumUp} />
+                    </td>
+                  </tr>
                 ))}
-              </ul>
-            </div>
-          )}
-        </>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {detail?.hours && (
+        <div>
+          <div className="text-xs font-medium text-muted">Hours</div>
+          <ul className="mt-2 space-y-0.5 text-xs text-muted">
+            {detail.hours.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   )

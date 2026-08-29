@@ -1,13 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { GasMap } from '../components/GasMap'
-import { StationPanel } from '../components/StationPanel'
+import { Sidebar } from '../components/Sidebar'
 import { api, type StationSummary, type StatsSummary } from '../lib/api'
 import { CA_PROVINCES, REGIONS, regionById, type RegionId } from '../lib/regions'
-
-function formatPrice(price: number | null): string {
-  return price === null ? '--' : `$${price.toFixed(2)}`
-}
 
 function median(values: number[]): number | null {
   if (values.length === 0) return null
@@ -60,21 +56,24 @@ export function MapView() {
   const openStation = useCallback((id: number) => setSearchParams({ station: String(id) }), [setSearchParams])
   const closeStation = useCallback(() => setSearchParams({}), [setSearchParams])
 
+  const selectedStation = useMemo(
+    () => (selectedStationId ? (stations?.find((s) => s.id === Number(selectedStationId)) ?? null) : null),
+    [stations, selectedStationId],
+  )
+
   // A shared station link might point at a warehouse outside whatever
   // region happens to be selected (localStorage-remembered, or the default)
   // -- once the full station list loads, jump to whichever region that
   // station actually belongs to so the map behind the panel makes sense.
   useEffect(() => {
-    if (!stations || !selectedStationId) return
-    const match = stations.find((s) => s.id === Number(selectedStationId))
-    if (!match) return
-    const matchedRegion = REGIONS.find((r) => r.matches(match))
+    if (!selectedStation) return
+    const matchedRegion = REGIONS.find((r) => r.matches(selectedStation))
     if (matchedRegion && matchedRegion.id !== regionId) selectRegion(matchedRegion.id)
     // Deliberately not depending on regionId -- this should only react to a
     // *new* station selection (or the station list arriving), not re-fire
     // every time the region changes for any other reason.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stations, selectedStationId])
+  }, [selectedStation])
 
   const regionStations = useMemo(() => stations?.filter(region.matches) ?? [], [stations, region])
 
@@ -135,61 +134,14 @@ export function MapView() {
           max-w-content pages -- a map wants the width. */}
       <div className="flex flex-col gap-4 px-4 sm:px-6 lg:flex-row lg:items-start">
         <aside className="flex-shrink-0 space-y-6 lg:w-72">
-          {selectedStationId ? (
-            <div className="rounded-lg border border-border bg-surface p-4">
-              <StationPanel
-                stationId={Number(selectedStationId)}
-                regionMedian={summary?.median ?? null}
-                onClose={closeStation}
-              />
-            </div>
-          ) : (
-            <>
-              <div className="rounded-lg border border-border bg-surface p-4">
-                <div className="text-xs font-medium text-muted">{region.label} median (regular)</div>
-                <div className="mt-1 text-3xl font-bold text-foreground">
-                  {summary ? formatPrice(summary.median) : '--'}
-                </div>
-                {summary && (
-                  <div className="mt-3 flex justify-between text-xs">
-                    <div>
-                      <div className="text-muted">Lowest</div>
-                      <div className="font-mono text-positive">{formatPrice(summary.lowest.regular_price)}</div>
-                      <div className="text-muted">
-                        {summary.lowest.city}, {summary.lowest.state}
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-muted">Highest</div>
-                      <div className="font-mono text-negative">{formatPrice(summary.highest.regular_price)}</div>
-                      <div className="text-muted">
-                        {summary.highest.city}, {summary.highest.state}
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {stateBreakdown.length > 0 && (
-                <div className="rounded-lg border border-border bg-surface p-4">
-                  <div className="text-xs font-medium text-muted">
-                    Cheapest {regionId === 'ca' ? 'provinces' : 'states'} (7-day avg)
-                  </div>
-                  <ol className="mt-3 space-y-2">
-                    {stateBreakdown.map((s, i) => (
-                      <li key={s.state} className="flex items-center justify-between text-sm">
-                        <span className="text-foreground">
-                          <span className="mr-2 text-muted">{i + 1}</span>
-                          {s.state}
-                        </span>
-                        <span className="font-mono text-muted">${s.avg_regular_price.toFixed(2)}</span>
-                      </li>
-                    ))}
-                  </ol>
-                </div>
-              )}
-            </>
-          )}
+          <Sidebar
+            region={region}
+            regionId={regionId}
+            summary={summary}
+            stateBreakdown={stateBreakdown}
+            selectedStation={selectedStation}
+            onCloseStation={closeStation}
+          />
         </aside>
 
         <div className="h-[75vh] min-h-[500px] w-full overflow-hidden rounded-lg border border-border">

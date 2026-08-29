@@ -1,0 +1,91 @@
+import { StationPanel } from './StationPanel'
+import type { StateStat, StationSummary } from '../lib/api'
+import type { Region, RegionId } from '../lib/regions'
+
+function formatPrice(price: number | null): string {
+  return price === null ? '--' : `$${price.toFixed(2)}`
+}
+
+interface RegionSummary {
+  median: number | null
+  lowest: StationSummary & { regular_price: number }
+  highest: StationSummary & { regular_price: number }
+}
+
+/** The map page's left panel -- two views, switched by whether a station is
+ * selected, never a route change or a full-page navigation. Kept as one
+ * component (rather than each view managing its own visibility) so that
+ * switching between them is a single synchronous render, not a fetch-then-
+ * swap that would otherwise flash a blank/loading state in between -- see
+ * StationPanel's own `station` prop for the other half of that: it always
+ * has the already-loaded summary row to render immediately, even before
+ * its own history fetch resolves. */
+export function Sidebar({
+  region,
+  regionId,
+  summary,
+  stateBreakdown,
+  selectedStation,
+  onCloseStation,
+}: {
+  region: Region
+  regionId: RegionId
+  summary: RegionSummary | null
+  stateBreakdown: StateStat[]
+  selectedStation: StationSummary | null
+  onCloseStation: () => void
+}) {
+  if (selectedStation) {
+    return (
+      <div className="rounded-lg border border-border bg-surface p-4">
+        <StationPanel station={selectedStation} regionMedian={summary?.median ?? null} onClose={onCloseStation} />
+      </div>
+    )
+  }
+
+  return (
+    <>
+      <div className="rounded-lg border border-border bg-surface p-4">
+        <div className="text-xs font-medium text-muted">{region.label} median (regular)</div>
+        <div className="mt-1 text-3xl font-bold text-foreground">{summary ? formatPrice(summary.median) : '--'}</div>
+        {summary && (
+          <div className="mt-3 flex justify-between text-xs">
+            <div>
+              <div className="text-muted">Lowest</div>
+              <div className="font-mono text-positive">{formatPrice(summary.lowest.regular_price)}</div>
+              <div className="text-muted">
+                {summary.lowest.city}, {summary.lowest.state}
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="text-muted">Highest</div>
+              <div className="font-mono text-negative">{formatPrice(summary.highest.regular_price)}</div>
+              <div className="text-muted">
+                {summary.highest.city}, {summary.highest.state}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {stateBreakdown.length > 0 && (
+        <div className="rounded-lg border border-border bg-surface p-4">
+          <div className="text-xs font-medium text-muted">
+            Cheapest {regionId === 'ca' ? 'provinces' : 'states'} (7-day avg)
+          </div>
+          <ol className="mt-3 space-y-2">
+            {stateBreakdown.map((s, i) => (
+              <li key={s.state} className="flex items-center justify-between text-sm">
+                <span className="text-foreground">
+                  <span className="mr-2 text-muted">{i + 1}</span>
+                  {s.state}
+                </span>
+                <span className="font-mono text-muted">${s.avg_regular_price.toFixed(2)}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+    </>
+  )
+}
