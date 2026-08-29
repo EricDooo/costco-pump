@@ -35,6 +35,7 @@ import asyncio
 import logging
 from typing import Any
 
+from curl_cffi.const import CurlIpResolve, CurlOpt
 from curl_cffi.requests import AsyncSession
 from curl_cffi.requests.exceptions import RequestException
 
@@ -68,6 +69,16 @@ HEADERS = {
 # says a bot script) and got silently dropped every time in testing;
 # stripping it out is what actually fixed that, not a longer timeout.
 IMPERSONATE = "chrome131"
+
+# Both Costco hosts resolve to both an A and an AAAA record, but this
+# project's Docker networks (costco-pump_egress/_backend) have IPv6
+# disabled -- no route, no interface. A client that tries the AAAA address
+# doesn't get a fast "network unreachable"; it just hangs until the OS-level
+# TCP connect eventually gives up, which is minutes, not seconds. Forcing
+# IPv4 here is what actually fixed the multi-minute silent hangs seen in
+# production -- confirmed by reproducing the exact hang on the real
+# `egress` network and watching CurlIpResolve.V4 fix it in place.
+CURL_OPTIONS = {CurlOpt.IPRESOLVE: CurlIpResolve.V4}
 
 MAX_ATTEMPTS = 3
 
@@ -152,7 +163,7 @@ async def fetch_grid_point(lat: float, lng: float) -> list[dict]:
     what the live per-job sweep path (scraper/jobs.py) calls -- one job per
     grid point, matching enqueuer.py's schedule."""
     async with AsyncSession(
-        base_url=LOCATOR_BASE_URL, impersonate=IMPERSONATE, timeout=settings.scrape_timeout_seconds
+        base_url=LOCATOR_BASE_URL, impersonate=IMPERSONATE, curl_options=CURL_OPTIONS, timeout=settings.scrape_timeout_seconds
     ) as locator_client:
         locations = await _fetch_locations(locator_client, lat, lng)
     if not locations:
@@ -160,7 +171,7 @@ async def fetch_grid_point(lat: float, lng: float) -> list[dict]:
 
     ids = [str(loc.get("salesLocationId")) for loc in locations if loc.get("salesLocationId")]
     async with AsyncSession(
-        base_url=PRICES_BASE_URL, impersonate=IMPERSONATE, timeout=settings.scrape_timeout_seconds
+        base_url=PRICES_BASE_URL, impersonate=IMPERSONATE, curl_options=CURL_OPTIONS, timeout=settings.scrape_timeout_seconds
     ) as prices_client:
         prices = await _fetch_prices(prices_client, ids)
 
@@ -182,7 +193,7 @@ async def sweep() -> list[dict]:
             return await _fetch_locations(client, lat, lng)
 
     async with AsyncSession(
-        base_url=LOCATOR_BASE_URL, impersonate=IMPERSONATE, timeout=settings.scrape_timeout_seconds
+        base_url=LOCATOR_BASE_URL, impersonate=IMPERSONATE, curl_options=CURL_OPTIONS, timeout=settings.scrape_timeout_seconds
     ) as client:
         results = await asyncio.gather(*(_bounded(client, lat, lng) for lat, lng in points))
 
@@ -196,7 +207,7 @@ async def sweep() -> list[dict]:
     ids = list(seen.keys())
     prices: dict[str, dict] = {}
     async with AsyncSession(
-        base_url=PRICES_BASE_URL, impersonate=IMPERSONATE, timeout=settings.scrape_timeout_seconds
+        base_url=PRICES_BASE_URL, impersonate=IMPERSONATE, curl_options=CURL_OPTIONS, timeout=settings.scrape_timeout_seconds
     ) as client:
         for i in range(0, len(ids), PRICE_BATCH_SIZE):
             prices.update(await _fetch_prices(client, ids[i : i + PRICE_BATCH_SIZE]))
