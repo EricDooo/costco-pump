@@ -3,7 +3,6 @@ import type { FeatureCollection, Point } from 'geojson'
 import {
   Map as MaplibreMap,
   NavigationControl,
-  Popup,
   type GeoJSONSource,
   type MapLayerMouseEvent,
   type StyleSpecification,
@@ -270,33 +269,6 @@ function buildStyle(flavorName: 'light' | 'dark', stations: StationSummary[], ti
   }
 }
 
-function escapeHtml(s: string): string {
-  const entities: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
-  return s.replace(/[&<>"']/g, (c) => entities[c]!)
-}
-
-function popupHtml(props: Record<string, unknown>): string {
-  const price = typeof props.regular_price === 'number' ? `$${props.regular_price.toFixed(2)}` : '--'
-  const href = `${import.meta.env.BASE_URL}stations/${props.id}`
-  // Outside the React tree (MapLibre owns this DOM), so plain markup and a
-  // real <a href> -- it's a full navigation, not a client-side route change,
-  // but Caddy's try_files sends any /costcogas/* deep link to index.html so
-  // React Router still resolves it correctly on load.
-  // Explicit color on the wrapper: this HTML sits in MapLibre's own popup
-  // bubble (always a white background, light or dark site theme alike), but
-  // it's still parsed as part of this page's DOM, so without this it
-  // inherits the app's --foreground -- near-white in dark mode, invisible
-  // text on a white bubble.
-  return `
-    <div style="font: 13px system-ui, sans-serif; min-width: 160px; color: #111;">
-      <div style="font-weight: 600; margin-bottom: 2px;">${escapeHtml(String(props.name ?? ''))}</div>
-      <div style="color: #666; margin-bottom: 6px;">${escapeHtml(String(props.city ?? ''))}, ${escapeHtml(String(props.state ?? ''))}</div>
-      <div style="font-family: ui-monospace, monospace; font-size: 14px; margin-bottom: 6px;">${price} <span style="color: #666; font-size: 11px;">regular</span></div>
-      <a href="${href}" style="color: #2563eb; text-decoration: underline;">View details →</a>
-    </div>
-  `
-}
-
 interface GasMapProps {
   stations: StationSummary[]
   /** Filename under /costcogas/tiles/ for this region's basemap extract --
@@ -304,12 +276,16 @@ interface GasMapProps {
   tilesFile: string
   center: [number, number]
   zoom: number
+  /** Called with a station's id when its pill is clicked -- the caller
+   * (MapView) opens the in-panel station detail rather than this component
+   * knowing anything about routing/panels itself. */
+  onStationClick: (id: number) => void
 }
 
 /** Map of every station in the current region with a live price, clustered
  * by proximity. Basemap is a self-hosted Protomaps PMTiles extract (see
  * lib/tiles.ts) -- no third-party map API key or quota. */
-export function GasMap({ stations, tilesFile, center, zoom }: GasMapProps) {
+export function GasMap({ stations, tilesFile, center, zoom, onStationClick }: GasMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const { theme } = useTheme()
 
@@ -358,12 +334,8 @@ export function GasMap({ stations, tilesFile, center, zoom }: GasMapProps) {
 
     map.on('click', 'unclustered-point', (e: MapLayerMouseEvent) => {
       const feature = e.features?.[0]
-      if (!feature) return
-      const [lng, lat] = (feature.geometry as Point).coordinates
-      new Popup({ closeButton: true, offset: 10 })
-        .setLngLat([lng, lat])
-        .setHTML(popupHtml(feature.properties ?? {}))
-        .addTo(map)
+      const id = feature?.properties?.id
+      if (typeof id === 'number') onStationClick(id)
     })
 
     for (const layerId of ['clusters', 'unclustered-point']) {
@@ -379,7 +351,9 @@ export function GasMap({ stations, tilesFile, center, zoom }: GasMapProps) {
     // center is a tuple from regions.ts's static REGIONS array, so it's a
     // stable reference per region (not a fresh array each render) as long
     // as the caller passes region.center straight through -- see MapView.tsx.
-  }, [theme, stations, tilesFile, center, zoom])
+    // onStationClick must likewise be stable (useCallback or a setState
+    // setter) or every render would tear down and rebuild the whole map.
+  }, [theme, stations, tilesFile, center, zoom, onStationClick])
 
   return <div ref={containerRef} className="h-full w-full" />
 }
