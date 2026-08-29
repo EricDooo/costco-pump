@@ -9,9 +9,10 @@ Two independent schedules, run concurrently:
     at 50/page, which is why the grid-sweep approach existed at all; the
     price endpoint takes a batch of IDs directly, and this ID source
     doesn't depend on a grid sweep ever having run -- it works from a
-    completely empty database. ~616 warehouses / 50 per batch is ~13 jobs,
-    down from ~184 grid-point jobs -- most of which used to exist only to
-    re-discover IDs we'd already seen.
+    completely empty database. ~616 warehouses / 10 per batch (the price
+    endpoint's own silent per-call cap, see client.py's PRICE_BATCH_SIZE)
+    is ~62 jobs, still down from ~184 grid-point jobs -- most of which used
+    to exist only to re-discover IDs we'd already seen.
   - metadata sweep (daily, `metadata_sweep_interval_seconds`): the original
     full grid sweep, discovering new/closed warehouses and refreshing
     address/hours. Still grid-based -- salesLocations.json only takes
@@ -56,9 +57,11 @@ WAREHOUSE_IDS_CACHE_KEY = "warehouse_ids"
 # leaves headroom before the next one begins.
 SPREAD_FRACTION = 0.9
 
-# Matches scraper/client.py's PRICE_BATCH_SIZE -- the batch size Costco's
-# own locator page uses for one price call.
-PRICE_BATCH_SIZE = 50
+# Matches scraper/client.py's PRICE_BATCH_SIZE -- the endpoint silently
+# caps its response at 10 prices no matter how many IDs are requested (see
+# that module's comment), confirmed after warehouses past position 10 in a
+# 50-ID batch kept null prices forever in production.
+PRICE_BATCH_SIZE = 10
 
 
 async def _enqueue_paced(job_name: str, jobs_args: list[tuple], batch_time: str, interval_seconds: float, job_timeout: int) -> None:

@@ -59,8 +59,17 @@ LOCATOR_CLIENT_ID = "7c71124c-7bf1-44db-bc9d-498584cd66e5"
 
 PRICES_BASE_URL = "https://www.costco.com"
 PRICES_PATH = "/AjaxGetGasPricesService"
-# Matches the batch size Costco's own locator page uses for one price call.
-PRICE_BATCH_SIZE = 50
+# The endpoint silently caps its response at 10 warehouses, no matter how
+# many IDs the request asks for -- confirmed empirically (requested 10, 15,
+# 20, 25; got exactly 10 back every time, no truncation flag, no error).
+# Costco's own frontend sends far more IDs than that in one call (~50, seen
+# in real browser traffic), so either their page silently eats the same
+# loss and doesn't care, or something else about a real session's request
+# gets more through -- either way, asking for more than 10 here just means
+# warehouses past the 10th in a batch silently keep last-known (or no)
+# price data forever, which is exactly what happened to real warehouses in
+# production before this was caught.
+PRICE_BATCH_SIZE = 10
 
 # The full warehouse-locations page -- any query string, any path under
 # /w/-/locations, returns the identical Next.js bundle (confirmed: same
