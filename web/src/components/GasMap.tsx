@@ -54,10 +54,18 @@ function makePillImage(fillColor: string): ImageData {
   const h = (PILL_H + TAIL_H) * scale
   const r = PILL_RADIUS * scale
   const pillH = PILL_H * scale
+  const strokeWidth = 1.5 * scale
+  // The path's top/left/right edges sit exactly on the canvas bounds, so
+  // the stroke (which straddles the path) got clipped there -- pad those
+  // three sides and translate so the stroke has room. Bottom stays flush:
+  // icon-anchor:'bottom' below anchors on the tail tip, which must stay
+  // exactly at the image's bottom edge.
+  const pad = strokeWidth / 2
   const canvas = document.createElement('canvas')
-  canvas.width = w
-  canvas.height = h
+  canvas.width = w + pad * 2
+  canvas.height = h + pad
   const ctx = canvas.getContext('2d')!
+  ctx.translate(pad, pad)
 
   const tailHalf = 5 * scale
   const tailCenter = w / 2
@@ -77,11 +85,11 @@ function makePillImage(fillColor: string): ImageData {
   ctx.closePath()
   ctx.fillStyle = fillColor
   ctx.fill()
-  ctx.lineWidth = 1.5 * scale
+  ctx.lineWidth = strokeWidth
   ctx.strokeStyle = '#ffffff'
   ctx.stroke()
 
-  return ctx.getImageData(0, 0, w, h)
+  return ctx.getImageData(0, 0, canvas.width, canvas.height)
 }
 
 const PILL_COLOR_BY_ID = new Map<string, string>([
