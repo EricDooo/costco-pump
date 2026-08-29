@@ -49,8 +49,10 @@ class PriceReading(Base):
     # is a Timescale hypertable partitioned on time.
     time: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
     warehouse_id: Mapped[int] = mapped_column(ForeignKey("warehouses.id"), primary_key=True)
-    regular_price: Mapped[float | None] = mapped_column(Numeric(5, 3), nullable=True)
-    premium_price: Mapped[float | None] = mapped_column(Numeric(5, 3), nullable=True)
-    diesel_price: Mapped[float | None] = mapped_column(Numeric(5, 3), nullable=True)
+    # (7, 3): 5,3 (max 99.999) overflowed on Japan's yen-per-liter prices
+    # (~¥150) -- every Japan upsert was silently failing on this before.
+    regular_price: Mapped[float | None] = mapped_column(Numeric(7, 3), nullable=True)
+    premium_price: Mapped[float | None] = mapped_column(Numeric(7, 3), nullable=True)
+    diesel_price: Mapped[float | None] = mapped_column(Numeric(7, 3), nullable=True)
 
     warehouse: Mapped[Warehouse] = relationship(back_populates="readings")

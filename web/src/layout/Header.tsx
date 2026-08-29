@@ -24,7 +24,7 @@ export function Header() {
           ⛽
         </span>
         <div className="leading-tight">
-          <div className="text-base font-bold text-foreground">Costco Gas Prices</div>
+          <div className="text-base font-bold text-foreground">Costco Pump</div>
           <div className="text-xs text-muted">Live prices, tracked automatically</div>
         </div>
       </div>
