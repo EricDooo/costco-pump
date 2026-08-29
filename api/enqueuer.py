@@ -12,18 +12,25 @@ Three independent schedules, run concurrently:
     this is a single job, not a grid of ~184 points anymore. Discovers
     new/closed warehouses and refreshes address/hours; doesn't touch prices
     (see scraper/jobs.py's refresh_metadata for why).
-  - international sweep (`international_sweep_interval_seconds`): one job
-    per country in scraper/international.py's COUNTRIES, each a full
-    metadata+price refresh via that country's SAP Commerce Cloud API in one
-    call.
+  - international sweep (`international_check_interval_seconds`, default 2
+    hours): NOT one shared round like the other two -- each country in
+    scraper/international.py's COUNTRIES is checked independently, on its
+    own clock, and only enqueued while it's currently daytime there (see
+    INTERNATIONAL_BUSINESS_START_HOUR/END_HOUR below). A single shared UTC
+    schedule made no sense across 8 countries spanning nearly every
+    timezone: "every 3 hours" would hit some countries at 3am local and
+    others at 3pm. Polling each country's local hour independently instead
+    means Australia's evening checks happen on Australia's clock, Mexico's
+    on Mexico's, with no coordination between them needed.
 
 The price sweep still trickles its batch jobs across most of its interval
 (see SPREAD_FRACTION) -- with scraper/client.py's curl_cffi calls being
 near-instant, enqueuing all ~80 batch jobs at once and letting SimpleWorker
 drain them back-to-back reproduced the exact silent-drop hangs seen
-elsewhere in this project when request volume spikes. Metadata and
-international sweeps don't need pacing: each country/the whole US/CA/UK
-database is one job, so there's nothing to spread out.
+elsewhere in this project when request volume spikes. The metadata sweep
+doesn't need pacing: the whole US/CA/UK database is one job. The
+international scheduler doesn't either, for a different reason -- see above,
+it's not a batch round at all.
 
 This process only enqueues; `worker.py` is what actually does the work.
 Separating them is the point of using a queue at all -- a slow or failed
@@ -34,6 +41,7 @@ running more `worker` replicas without touching this file.
 import asyncio
 import datetime as dt
 import logging
+import zoneinfo
 
 from app.config import settings
 from app.db import init_models
@@ -47,6 +55,21 @@ logger = logging.getLogger(__name__)
 # so a round that starts slightly late (or a slow job along the way) still
 # leaves headroom before the next one begins.
 SPREAD_FRACTION = 0.9
+
+# The international scheduler's "is it worth checking this country right
+# now" window, in that country's own local time -- gas prices don't move
+# overnight, so there's no point sweeping a country at 3am local. Wide on
+# purpose (covers early risers through late closers) rather than trying to
+# match each country's actual warehouse hours, which vary per-warehouse
+# anyway (see scraper/international.py's _format_hours).
+INTERNATIONAL_BUSINESS_START_HOUR = 6
+INTERNATIONAL_BUSINESS_END_HOUR = 22
+
+# How often the international scheduler wakes up to check every country's
+# local clock -- not itself a per-country cadence (that's
+# international_check_interval_seconds), just how granular the "did a
+# country's window open, or has 2 hours passed" check is.
+INTERNATIONAL_POLL_SECONDS = 300
 
 # Matches scraper/client.py's PRICE_BATCH_SIZE -- the endpoint silently
 # caps its response at 10 prices no matter how many IDs are requested (see
@@ -97,16 +120,46 @@ async def enqueue_metadata_sweep() -> None:
     logger.info("Enqueued metadata sweep job (batch %s)", batch_time)
 
 
-async def enqueue_international_sweep() -> None:
-    batch_time = dt.datetime.now(dt.timezone.utc).isoformat()
-    await _enqueue_paced(
-        "app.scraper.jobs.refresh_international_country",
-        list(COUNTRIES),
-        batch_time,
-        settings.international_sweep_interval_seconds,
-        job_timeout=120,
-    )
-    logger.info("Enqueued %d international sweep jobs (batch %s)", len(COUNTRIES), batch_time)
+async def _international_scheduler() -> None:
+    """Independently paces each country in COUNTRIES -- see module
+    docstring's "international sweep" section for why this isn't a shared
+    round like the other two schedules. `last_run` is in-memory only (keyed
+    by monotonic loop time, not wall clock, so it's immune to any system
+    clock jump): resets on an enqueuer restart, which just means every
+    country becomes immediately eligible again on the next poll rather than
+    waiting out whatever was left of its 2 hours -- fine for a handful of
+    cheap calls, and simpler than persisting it anywhere."""
+    last_run: dict[str, float] = {}
+    loop = asyncio.get_event_loop()
+    while True:
+        now_utc = dt.datetime.now(dt.timezone.utc)
+        for country, domain, offset, tz_name in COUNTRIES:
+            try:
+                local_hour = now_utc.astimezone(zoneinfo.ZoneInfo(tz_name)).hour
+                if not (INTERNATIONAL_BUSINESS_START_HOUR <= local_hour < INTERNATIONAL_BUSINESS_END_HOUR):
+                    continue
+                # Unset means "never run" -- treat as already overdue rather
+                # than requiring a first full interval to pass after startup.
+                due_at = last_run.get(country, -settings.international_check_interval_seconds)
+                if loop.time() - due_at < settings.international_check_interval_seconds:
+                    continue
+                sweep_queue.enqueue(
+                    "app.scraper.jobs.refresh_international_country",
+                    country,
+                    domain,
+                    offset,
+                    now_utc.isoformat(),
+                    job_timeout=120,
+                )
+                logger.info("Enqueued international sweep for %s (local hour %d)", country, local_hour)
+                last_run[country] = loop.time()
+            except Exception:
+                # One country's tz lookup or enqueue failing (e.g. a bad
+                # tzdata install) shouldn't take the other 7 -- or the price
+                # and metadata schedules running in the same gather -- down
+                # with it.
+                logger.exception("International scheduler failed for %s; will retry next poll", country)
+        await asyncio.sleep(INTERNATIONAL_POLL_SECONDS)
 
 
 async def _schedule(name: str, run_round, interval_seconds: float) -> None:
@@ -129,7 +182,7 @@ async def main() -> None:
     await asyncio.gather(
         _schedule("price sweep", enqueue_price_sweep, settings.sweep_interval_seconds),
         _schedule("metadata sweep", enqueue_metadata_sweep, settings.metadata_sweep_interval_seconds),
-        _schedule("international sweep", enqueue_international_sweep, settings.international_sweep_interval_seconds),
+        _international_scheduler(),
     )
 
 

@@ -54,17 +54,21 @@ logger = logging.getLogger(__name__)
 
 # (country slug for the API's own `query`/path segment, site domain,
 # offset into warehouses.id's shared integer space -- see module
-# docstring's "ID collisions" section). 10,000-wide blocks per country --
-# the largest seen so far (Mexico) has 44 warehouses.
-COUNTRIES: list[tuple[str, str, int]] = [
-    ("australia", "costco.com.au", 900_000),
-    ("japan", "costco.co.jp", 910_000),
-    ("mexico", "costco.com.mx", 920_000),
-    ("taiwan", "costco.com.tw", 930_000),
-    ("spain", "costco.es", 940_000),
-    ("france", "costco.fr", 950_000),
-    ("korea", "costco.co.kr", 960_000),
-    ("iceland", "costco.is", 970_000),
+# docstring's "ID collisions" section -- and an IANA timezone used only for
+# scheduling, see enqueuer.py's international scheduler: one representative
+# zone per country, close enough to decide "is it daytime there" even for
+# countries that technically span more than one, like Australia). 10,000-
+# wide blocks per country -- the largest seen so far (Mexico) has 44
+# warehouses.
+COUNTRIES: list[tuple[str, str, int, str]] = [
+    ("australia", "costco.com.au", 900_000, "Australia/Sydney"),
+    ("japan", "costco.co.jp", 910_000, "Asia/Tokyo"),
+    ("mexico", "costco.com.mx", 920_000, "America/Mexico_City"),
+    ("taiwan", "costco.com.tw", 930_000, "Asia/Taipei"),
+    ("spain", "costco.es", 940_000, "Europe/Madrid"),
+    ("france", "costco.fr", 950_000, "Europe/Paris"),
+    ("korea", "costco.co.kr", 960_000, "Asia/Seoul"),
+    ("iceland", "costco.is", 970_000, "Atlantic/Reykjavik"),
 ]
 
 STORES_PATH_TEMPLATE = "/rest/v2/{country}/stores"
@@ -205,6 +209,6 @@ async def fetch_all() -> list[dict]:
     production path enqueues one job per country instead (see
     scraper/jobs.py's refresh_international_country + enqueuer.py)."""
     records: list[dict] = []
-    for country, domain, offset in COUNTRIES:
+    for country, domain, offset, _tz in COUNTRIES:
         records.extend(await fetch_country(country, domain, offset))
     return records

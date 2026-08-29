@@ -14,6 +14,11 @@ dependencies = [
   "geoalchemy2>=0.15",
   "rq>=1.16",
   "slowapi>=0.1.9",
+  # python:3.12-slim (this project's base image) has no /usr/share/zoneinfo
+  # -- stdlib zoneinfo.ZoneInfo() raises ZoneInfoNotFoundError without this
+  # (used by enqueuer.py's international scheduler to check each country's
+  # local business hours).
+  "tzdata>=2025.2",
 ]
 
 [build-system]

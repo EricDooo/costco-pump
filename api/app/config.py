@@ -23,13 +23,13 @@ class Settings(BaseSettings):
     # points, so there's no real cost to running it more often.
     metadata_sweep_interval_seconds: int = 60 * 60 * 3
 
-    # How often the enqueuer refreshes the international countries (see
-    # scraper/international.py) -- one job per country, each a combined
-    # metadata+price call via that country's SAP Commerce Cloud API. Same
-    # cadence as the US/CA/UK metadata sweep by default; kept as its own
-    # setting since the two schedules cover unrelated platforms and may
-    # want different intervals later.
-    international_sweep_interval_seconds: int = 60 * 60 * 3
+    # How often each international country (see scraper/international.py)
+    # gets refreshed, while it's in its own local business hours -- see
+    # enqueuer.py's _international_scheduler. Not a shared round like the
+    # two settings above: each of the 8 countries is paced independently on
+    # its own clock, so this is "how often per country", not "how often for
+    # all of them together".
+    international_check_interval_seconds: int = 60 * 60 * 2
 
     scrape_timeout_seconds: float = 30.0
 
