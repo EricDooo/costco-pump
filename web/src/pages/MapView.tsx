@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { GasMap } from '../components/GasMap'
 import { Sidebar } from '../components/Sidebar'
+import { useRecentStations } from '../hooks/useRecentStations'
 import { useRegion } from '../hooks/useRegion'
-import { api, type StationSummary, type StatsSummary } from '../lib/api'
+import { api, type StationSummary, type StatsSummary, type TrendSummary } from '../lib/api'
 import { CA_PROVINCES, REGIONS } from '../lib/regions'
 
 function median(values: number[]): number | null {
@@ -16,8 +17,10 @@ function median(values: number[]): number | null {
 export function MapView() {
   const [stations, setStations] = useState<StationSummary[] | null>(null)
   const [stats, setStats] = useState<StatsSummary | null>(null)
+  const [trend, setTrend] = useState<TrendSummary | null>(null)
   const [error, setError] = useState<string | null>(null)
   const { regionId, region, setRegionId } = useRegion()
+  const { recentIds, addRecent } = useRecentStations()
   const [searchParams, setSearchParams] = useSearchParams()
 
   useEffect(() => {
@@ -29,10 +32,26 @@ export function MapView() {
       .catch(() => setError('Could not load live data right now.'))
   }, [])
 
+  // A compact trend line for the sidebar card -- 14 days is plenty for
+  // that small a chart; the full 30-day version lives on Analytics.
+  useEffect(() => {
+    setTrend(null)
+    api
+      .trend({ days: 14, region: regionId })
+      .then(setTrend)
+      .catch(() => {})
+  }, [regionId])
+
   // ?station=<id> is the source of truth for the open panel (shareable,
   // survives a refresh).
   const selectedStationId = searchParams.get('station')
-  const openStation = useCallback((id: number) => setSearchParams({ station: String(id) }), [setSearchParams])
+  const openStation = useCallback(
+    (id: number) => {
+      setSearchParams({ station: String(id) })
+      addRecent(id)
+    },
+    [setSearchParams, addRecent],
+  )
   const closeStation = useCallback(() => setSearchParams({}), [setSearchParams])
 
   const selectedStation = useMemo(
@@ -70,6 +89,13 @@ export function MapView() {
     return stats.cheapest_states.filter((s) => inRegion(s.state)).slice(0, 5)
   }, [stats, region, regionId])
 
+  // Resolved against the full (not region-filtered) list -- a recent
+  // station can be from a different region than the one currently shown.
+  const recentStations = useMemo(() => {
+    if (!stations) return []
+    return recentIds.flatMap((id) => stations.find((s) => s.id === id) ?? [])
+  }, [stations, recentIds])
+
   return (
     // h-full fills App.tsx's flex-1 slot; flex-col + min-h-0 below is what
     // lets the map claim the rest of the space instead of scrolling the page.
@@ -86,6 +112,9 @@ export function MapView() {
             summary={summary}
             stateBreakdown={stateBreakdown}
             regionStations={regionStations}
+            trend={trend}
+            recentStations={recentStations}
+            onSelectStation={openStation}
             selectedStation={selectedStation}
             onCloseStation={closeStation}
           />

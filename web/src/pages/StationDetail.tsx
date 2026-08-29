@@ -46,7 +46,7 @@ export function StationDetail() {
       {!error && !station && <p className="mt-8 text-sm text-muted">Loading...</p>}
 
       {station && (
-        <div className="mt-6 max-w-xl">
+        <div className="mx-auto mt-6 max-w-xl">
           <StationDetailContent station={station} detail={station} comparisons={comparisons} />
         </div>
       )}

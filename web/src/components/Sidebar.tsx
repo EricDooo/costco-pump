@@ -1,5 +1,6 @@
+import { TrendChart } from '../pages/Analytics'
 import { StationPanel } from './StationPanel'
-import type { StateStat, StationSummary } from '../lib/api'
+import type { StateStat, StationSummary, TrendSummary } from '../lib/api'
 import type { Region, RegionId } from '../lib/regions'
 
 function formatPrice(price: number | null): string {
@@ -20,6 +21,9 @@ export function Sidebar({
   summary,
   stateBreakdown,
   regionStations,
+  trend,
+  recentStations,
+  onSelectStation,
   selectedStation,
   onCloseStation,
 }: {
@@ -28,6 +32,9 @@ export function Sidebar({
   summary: RegionSummary | null
   stateBreakdown: StateStat[]
   regionStations: StationSummary[]
+  trend: TrendSummary | null
+  recentStations: StationSummary[]
+  onSelectStation: (id: number) => void
   selectedStation: StationSummary | null
   onCloseStation: () => void
 }) {
@@ -80,6 +87,31 @@ export function Sidebar({
               </li>
             ))}
           </ol>
+        </div>
+      )}
+
+      <div className="rounded-lg border border-border bg-surface p-4">
+        <div className="text-xs font-medium text-muted">{region.label} trend (14d)</div>
+        <TrendChart trend={trend} />
+      </div>
+
+      {recentStations.length > 0 && (
+        <div className="rounded-lg border border-border bg-surface p-4">
+          <div className="text-xs font-medium text-muted">Recently viewed</div>
+          <ul className="mt-3 space-y-2">
+            {recentStations.map((s) => (
+              <li key={s.id}>
+                <button
+                  type="button"
+                  onClick={() => onSelectStation(s.id)}
+                  className="flex w-full items-center justify-between gap-2 text-left text-sm hover:text-primary"
+                >
+                  <span className="min-w-0 truncate text-foreground">{s.name}</span>
+                  <span className="flex-shrink-0 font-mono text-muted">{formatPrice(s.regular_price)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </>
