@@ -39,6 +39,17 @@ _STATE_AVG_TEMPLATE = """
     from price_readings p
     join warehouses w on w.id = p.warehouse_id
     where p.time > now() - interval '7 days' and p.regular_price is not null
+      -- state/province codes are only meaningful for the domestic (US/CA/UK)
+      -- id range -- scraper/international.py's records put the country's own
+      -- ISO code in this same column (e.g. Australia's is literally "AU"),
+      -- which would otherwise silently show up as if it were a US state or
+      -- Canadian province in this ranking.
+      and w.id < 900000
+      -- UK warehouses have no state code at all (postcodes, not states --
+      -- see scraper/ingest.py's parse_warehouse), so this column is '' for
+      -- all of them; group them under one real state instead of an
+      -- unlabeled blank row.
+      and w.state != ''
     group by w.state
     order by avg_price {direction}
     limit 20
