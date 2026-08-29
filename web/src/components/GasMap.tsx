@@ -222,7 +222,14 @@ function buildStyle(flavorName: 'light' | 'dark', stations: StationSummary[]): S
             ],
           ],
           'icon-anchor': 'bottom',
-          'icon-allow-overlap': true,
+          // Deliberately no allow-overlap: MapLibre's default collision
+          // detection hides a pill (icon+text together, since both are in
+          // one symbol layer) when it would overlap an already-placed one
+          // -- forcing allow-overlap:true here overrode that and produced
+          // a wall of stacked, illegible pills in any dense metro area at
+          // the zoom where clusters first break apart. Letting collision
+          // detection do its job means denser areas just show fewer pills
+          // until you zoom in further, same as any map's place labels.
           'text-field': [
             'case',
             ['==', ['get', 'regular_price'], null],
@@ -233,7 +240,6 @@ function buildStyle(flavorName: 'light' | 'dark', stations: StationSummary[]): S
           'text-size': PILL_TEXT_SIZE,
           'text-anchor': 'bottom',
           'text-offset': [0, PILL_TEXT_OFFSET_EM],
-          'text-allow-overlap': true,
         },
         // Dark text reads fine against every tier color (greens through
         // red) -- simpler than a per-tier text color and no worse contrast
