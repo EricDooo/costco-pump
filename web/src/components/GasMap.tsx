@@ -21,19 +21,20 @@ const STATE_CLUSTERS_SOURCE_ID = 'state-clusters'
 // clusters -- a national view otherwise lumps neighboring states together.
 const STATE_ZOOM_THRESHOLD = 6
 const GLYPHS_URL = 'https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf'
-const LABEL_FONT = 'Noto Sans Regular'
 // protomaps-assets has no true Bold glyph (only Regular/Medium/Italic) --
 // Medium is the heaviest weight actually available.
 const PILL_FONT = 'Noto Sans Medium'
 
 // A station renders as a price-tag pill (colored badge + tail) instead of a
 // plain dot -- tier picked per feature by a step expression on regular_price.
+// Saturated/dark (600-weight) rather than pastel -- better contrast for
+// white text, especially on the cluster circles this scale also colors.
 const PRICE_TIERS: { id: string; color: string; max: number }[] = [
-  { id: 'pill-1', color: '#4ade80', max: 3.25 },
-  { id: 'pill-2', color: '#a3e635', max: 3.75 },
-  { id: 'pill-3', color: '#facc15', max: 4.25 },
-  { id: 'pill-4', color: '#fb923c', max: 4.75 },
-  { id: 'pill-5', color: '#f87171', max: Infinity },
+  { id: 'pill-1', color: '#16a34a', max: 3.25 },
+  { id: 'pill-2', color: '#65a30d', max: 3.75 },
+  { id: 'pill-3', color: '#ca8a04', max: 4.25 },
+  { id: 'pill-4', color: '#ea580c', max: 4.75 },
+  { id: 'pill-5', color: '#dc2626', max: Infinity },
 ]
 const PILL_FALLBACK_ID = 'pill-unknown'
 
@@ -85,7 +86,7 @@ function makePillImage(fillColor: string): ImageData {
 
 const PILL_COLOR_BY_ID = new Map<string, string>([
   ...PRICE_TIERS.map((t): [string, string] => [t.id, t.color]),
-  [PILL_FALLBACK_ID, '#9ca3af'],
+  [PILL_FALLBACK_ID, '#6b7280'],
 ])
 
 /** Lazy resolver, not an eager 'load'-time addImage loop -- that raced
@@ -239,8 +240,8 @@ function buildStyle(
         maxzoom: STATE_ZOOM_THRESHOLD,
         layout: {
           'text-field': '{count}',
-          'text-font': [LABEL_FONT],
-          'text-size': 12,
+          'text-font': [PILL_FONT],
+          'text-size': 13,
         },
         paint: {
           'text-color': '#ffffff',
@@ -294,8 +295,8 @@ function buildStyle(
         filter: ['has', 'point_count'],
         layout: {
           'text-field': '{point_count_abbreviated}',
-          'text-font': [LABEL_FONT],
-          'text-size': 12,
+          'text-font': [PILL_FONT],
+          'text-size': 13,
         },
         // Same halo as the pill text below -- avg-price color now spans
         // the same pale-to-saturated range plain white wasn't readable on.
