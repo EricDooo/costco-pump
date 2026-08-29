@@ -20,6 +20,86 @@ const STATIONS_SOURCE_ID = 'stations'
 const GLYPHS_URL = 'https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf'
 const LABEL_FONT = 'Noto Sans Regular'
 
+// Individual stations render as a price-tag pill (a rounded badge with a
+// small pointer tail, like GasBuddy/most real gas-price maps) instead of a
+// plain dot -- shows the actual price at a glance, no click needed. Each
+// tier is a separately pre-rendered image (see makePillImage) registered
+// with the map once at load; icon-image below picks one per feature by
+// price via a step expression. Fixed-size rather than stretched to fit
+// each price's text width (MapLibre's icon-text-fit can do that, but needs
+// a 9-slice image and careful anchor math to keep the tail undistorted --
+// not worth it when every domestic price is "$X.XX", a narrow, predictable
+// width).
+const PRICE_TIERS: { id: string; color: string; max: number }[] = [
+  { id: 'pill-1', color: '#4ade80', max: 3.25 },
+  { id: 'pill-2', color: '#a3e635', max: 3.75 },
+  { id: 'pill-3', color: '#facc15', max: 4.25 },
+  { id: 'pill-4', color: '#fb923c', max: 4.75 },
+  { id: 'pill-5', color: '#f87171', max: Infinity },
+]
+const PILL_FALLBACK_ID = 'pill-unknown'
+
+// All in CSS px (the canvas is drawn at 2x and registered with pixelRatio 2
+// for crisp text -- see makePillImage). Kept as constants because the text
+// vertical offset below has to line up with this exact geometry.
+const PILL_W = 48
+const PILL_H = 20
+const PILL_RADIUS = 10
+const TAIL_H = 6
+const PILL_TEXT_SIZE = 11
+// Distance from the image's bottom edge (the tail tip -- see icon-anchor
+// below) up to the pill's vertical center, converted to ems of
+// PILL_TEXT_SIZE the way MapLibre's text-offset expects.
+const PILL_TEXT_OFFSET_EM = -(TAIL_H + PILL_H / 2) / PILL_TEXT_SIZE
+
+function makePillImage(fillColor: string): ImageData {
+  const scale = 2 // draw at 2x, registered with pixelRatio 2, for crisp edges/text
+  const w = PILL_W * scale
+  const h = (PILL_H + TAIL_H) * scale
+  const r = PILL_RADIUS * scale
+  const pillH = PILL_H * scale
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d')!
+
+  const tailHalf = 5 * scale
+  const tailCenter = w / 2
+  ctx.beginPath()
+  ctx.moveTo(r, 0)
+  ctx.lineTo(w - r, 0)
+  ctx.arcTo(w, 0, w, r, r)
+  ctx.lineTo(w, pillH - r)
+  ctx.arcTo(w, pillH, w - r, pillH, r)
+  ctx.lineTo(tailCenter + tailHalf, pillH)
+  ctx.lineTo(tailCenter, h)
+  ctx.lineTo(tailCenter - tailHalf, pillH)
+  ctx.lineTo(r, pillH)
+  ctx.arcTo(0, pillH, 0, pillH - r, r)
+  ctx.lineTo(0, r)
+  ctx.arcTo(0, 0, r, 0, r)
+  ctx.closePath()
+  ctx.fillStyle = fillColor
+  ctx.fill()
+  ctx.lineWidth = 1.5 * scale
+  ctx.strokeStyle = '#ffffff'
+  ctx.stroke()
+
+  return ctx.getImageData(0, 0, w, h)
+}
+
+/** Registers every pill tier image with this map instance -- images are
+ * per-Map-instance state, so this has to re-run each time GasMap creates a
+ * new one (see the effect below, which rebuilds the whole map rather than
+ * patching an existing one). Safe to call once the map's 'load' event has
+ * fired, before any symbol layer referencing these ids actually renders. */
+function registerPillImages(map: MaplibreMap) {
+  for (const tier of PRICE_TIERS) {
+    if (!map.hasImage(tier.id)) map.addImage(tier.id, makePillImage(tier.color), { pixelRatio: 2 })
+  }
+  if (!map.hasImage(PILL_FALLBACK_ID)) map.addImage(PILL_FALLBACK_ID, makePillImage('#9ca3af'), { pixelRatio: 2 })
+}
+
 function resolvedFlavor(theme: 'light' | 'dark' | 'system'): Flavor {
   const dark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
   return dark ? DARK : LIGHT
@@ -104,30 +184,49 @@ function buildStyle(flavor: Flavor, stations: StationSummary[]): StyleSpecificat
       },
       {
         id: 'unclustered-point',
-        type: 'circle',
+        type: 'symbol',
         source: STATIONS_SOURCE_ID,
         filter: ['!', ['has', 'point_count']],
-        paint: {
-          // Same semantic colors as theme.css's --positive/--negative --
-          // cheap is green, expensive is red, regardless of light/dark
-          // basemap flavor (a price marker's color means the same thing
-          // either way). 4 is the fallback for a station with no live
-          // reading yet, landing it mid-scale rather than at an extreme.
-          'circle-color': [
-            'interpolate',
-            ['linear'],
-            ['coalesce', ['get', 'regular_price'], 4],
-            2.5,
-            '#1a7f37',
-            3.75,
-            '#eab308',
-            5,
-            '#cf222e',
+        layout: {
+          // Fixed-size price-tag pill per PRICE_TIERS (registerPillImages
+          // pre-renders one image per tier) -- picks the tier by price,
+          // pill-unknown for a station with no live reading yet.
+          'icon-image': [
+            'case',
+            ['==', ['get', 'regular_price'], null],
+            PILL_FALLBACK_ID,
+            [
+              'step',
+              ['get', 'regular_price'],
+              PRICE_TIERS[0]!.id,
+              PRICE_TIERS[0]!.max,
+              PRICE_TIERS[1]!.id,
+              PRICE_TIERS[1]!.max,
+              PRICE_TIERS[2]!.id,
+              PRICE_TIERS[2]!.max,
+              PRICE_TIERS[3]!.id,
+              PRICE_TIERS[3]!.max,
+              PRICE_TIERS[4]!.id,
+            ],
           ],
-          'circle-radius': 7,
-          'circle-stroke-width': 1.5,
-          'circle-stroke-color': '#ffffff',
+          'icon-anchor': 'bottom',
+          'icon-allow-overlap': true,
+          'text-field': [
+            'case',
+            ['==', ['get', 'regular_price'], null],
+            '--',
+            ['concat', '$', ['number-format', ['get', 'regular_price'], { 'min-fraction-digits': 2, 'max-fraction-digits': 2 }]],
+          ],
+          'text-font': [LABEL_FONT],
+          'text-size': PILL_TEXT_SIZE,
+          'text-anchor': 'bottom',
+          'text-offset': [0, PILL_TEXT_OFFSET_EM],
+          'text-allow-overlap': true,
         },
+        // Dark text reads fine against every tier color (greens through
+        // red) -- simpler than a per-tier text color and no worse contrast
+        // than a plain white pill would need anyway.
+        paint: { 'text-color': '#111111' },
       },
     ],
   }
@@ -191,6 +290,7 @@ export function GasMap({ stations }: { stations: StationSummary[] }) {
       attributionControl: { compact: true },
     })
     map.addControl(new NavigationControl({ showCompass: false }), 'top-right')
+    map.on('load', () => registerPillImages(map))
 
     map.on('click', 'clusters', async (e: MapLayerMouseEvent) => {
       const feature = e.features?.[0]
