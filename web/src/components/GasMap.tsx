@@ -57,6 +57,9 @@ const TAIL_H = 6
 const PILL_TEXT_SIZE = 11
 // Tail tip to pill center, in ems of PILL_TEXT_SIZE (as text-offset expects).
 const PILL_TEXT_OFFSET_EM = -(TAIL_H + PILL_H / 2) / PILL_TEXT_SIZE
+// Tail tip to just above the pill's top edge, for the "7d low" badge.
+const LOW_BADGE_TEXT_SIZE = 9
+const LOW_BADGE_OFFSET_EM = -(TAIL_H + PILL_H + 3) / LOW_BADGE_TEXT_SIZE
 
 function makePillImage(fillColor: string): ImageData {
   const scale = 2 // draw at 2x, registered with pixelRatio 2, for crisp edges/text
@@ -180,6 +183,7 @@ function toFeatureCollection(stations: StationSummary[]): FeatureCollection<Poin
             zip_code: s.zip_code,
             regular_price: s.regular_price,
             price_ratio: priceRatio,
+            is_7d_low: s.is_7d_low,
           },
         }
       }),
@@ -414,6 +418,27 @@ function buildStyle(
           'text-color': '#ffffff',
           'text-halo-color': '#00000099',
           'text-halo-width': 1.2,
+        },
+      },
+      {
+        // A small badge above the pill for a station at its own 7-day low --
+        // a separate layer rather than baking it into the pill image itself,
+        // since it's a per-station flag independent of the price-tier color.
+        id: 'seven-day-low-badge',
+        type: 'symbol',
+        source: STATIONS_SOURCE_ID,
+        filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'is_7d_low'], true]],
+        layout: {
+          'text-field': '7d low',
+          'text-font': [PILL_FONT],
+          'text-size': LOW_BADGE_TEXT_SIZE,
+          'text-anchor': 'bottom',
+          'text-offset': [0, LOW_BADGE_OFFSET_EM],
+        },
+        paint: {
+          'text-color': '#fbbf24',
+          'text-halo-color': '#00000099',
+          'text-halo-width': 1,
         },
       },
     ],

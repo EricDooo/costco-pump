@@ -16,6 +16,9 @@ class StationSummary(BaseModel):
     premium_price: float | None
     diesel_price: float | None
     as_of: dt.datetime | None
+    # regular_price at or below its own 7-day low -- see stations.py's
+    # _is_7d_low.
+    is_7d_low: bool
 
     model_config = {"from_attributes": True}
 
@@ -88,3 +91,11 @@ class StateChangeStat(BaseModel):
     cuts: int
     avg_change: float
     biggest_move: float
+
+
+class StateFuelStat(BaseModel):
+    state: str
+    avg_regular: float | None
+    avg_premium: float | None
+    avg_diesel: float | None
+    station_count: int
