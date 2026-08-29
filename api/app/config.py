@@ -7,10 +7,18 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://gas:gas@localhost:5432/gas"
     redis_url: str = "redis://localhost:6379/0"
 
-    # How often the enqueuer schedules a fresh price sweep, in seconds.
-    # Warehouse hours ride along free with the locator call each sweep
-    # already makes (see scraper/client.py) -- no separate hours job.
+    # How often the enqueuer schedules a fresh price sweep, in seconds --
+    # reads warehouse IDs straight from our own `warehouses` table (see
+    # enqueuer.py) rather than rediscovering them via the grid every time,
+    # so this can run often without hammering the locator endpoint at all.
     sweep_interval_seconds: int = 60 * 60
+
+    # How often the enqueuer runs a full grid-based metadata sweep -- the
+    # one that discovers new/closed warehouses and refreshes address/hours
+    # (see scraper/client.py's fetch_grid_point). Warehouses open or close
+    # rarely enough that this doesn't need hourly cadence; daily is already
+    # generous, and it's the price sweep above that stays fast/frequent.
+    metadata_sweep_interval_seconds: int = 60 * 60 * 24
 
     # Grid spacing in degrees for the lat/lng sweep. Smaller = more overlap,
     # more requests. 3 degrees comfortably covers every CONUS warehouse with a

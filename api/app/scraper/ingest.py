@@ -15,6 +15,7 @@ import logging
 from typing import Any
 
 from geoalchemy2.elements import WKTElement
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -133,6 +134,48 @@ async def upsert_warehouse_and_reading(session: AsyncSession, row: dict, batch_t
         )
     )
     await session.execute(reading_stmt)
+
+
+async def get_all_warehouse_ids(session: AsyncSession) -> list[int]:
+    """Every warehouse ID already known to us -- the source enqueuer.py's
+    hourly price sweep reads from, instead of rediscovering IDs via the grid
+    every time (see client.fetch_prices). New/closed warehouses only show up
+    here after the next metadata sweep picks them up."""
+    result = await session.execute(select(Warehouse.id))
+    return [row[0] for row in result.all()]
+
+
+async def upsert_price_reading(session: AsyncSession, warehouse_id: int, price: dict, batch_time: dt.datetime) -> bool:
+    """Record one price reading for an already-known warehouse -- the
+    price-only sweep path (scraper/jobs.py's refresh_price_batch). No
+    location/address touched here, unlike upsert_warehouse_and_reading:
+    the warehouse row already exists (its ID came from get_all_warehouse_ids
+    above), and the FK on price_readings.warehouse_id means this simply
+    fails loudly if it somehow doesn't, rather than silently orphaning a
+    reading.
+    """
+    regular = _price(price, "regular")
+    premium = _price(price, "premium")
+    diesel = _price(price, "diesel")
+    if regular is None and premium is None and diesel is None:
+        return False
+
+    stmt = (
+        pg_insert(PriceReading)
+        .values(
+            time=batch_time,
+            warehouse_id=warehouse_id,
+            regular_price=regular,
+            premium_price=premium,
+            diesel_price=diesel,
+        )
+        .on_conflict_do_update(
+            index_elements=[PriceReading.time, PriceReading.warehouse_id],
+            set_={"regular_price": regular, "premium_price": premium, "diesel_price": diesel},
+        )
+    )
+    await session.execute(stmt)
+    return True
 
 
 async def ingest(session: AsyncSession, raw_warehouses: list[dict], batch_time: dt.datetime | None = None) -> int:

@@ -157,11 +157,26 @@ def _normalize(location: dict, prices: dict[str, dict]) -> dict:
     }
 
 
+async def fetch_prices(ids: list[str]) -> dict[str, dict]:
+    """Live prices for a batch of already-known warehouse IDs (at most
+    PRICE_BATCH_SIZE -- enqueuer.py splits the full ID list into batches
+    this size, one job per batch). This is the fast, frequent hourly path:
+    no locator call at all, since the IDs come straight from our own
+    `warehouses` table (see ingest.get_all_warehouse_ids) instead of being
+    rediscovered via the grid every time -- that's what fetch_grid_point/
+    sweep below are for, run far less often."""
+    async with AsyncSession(
+        base_url=PRICES_BASE_URL, impersonate=IMPERSONATE, curl_options=CURL_OPTIONS, timeout=settings.scrape_timeout_seconds
+    ) as client:
+        return await _fetch_prices(client, ids)
+
+
 async def fetch_grid_point(lat: float, lng: float) -> list[dict]:
     """One grid point, fully resolved: nearby gas warehouses plus their
     current prices, normalized and ready for ingest.parse_warehouse. This is
-    what the live per-job sweep path (scraper/jobs.py) calls -- one job per
-    grid point, matching enqueuer.py's schedule."""
+    the metadata-sweep path (scraper/jobs.py's scrape_grid_point) --
+    discovers new/closed warehouses and refreshes address/hours, run daily
+    rather than hourly (see enqueuer.py)."""
     async with AsyncSession(
         base_url=LOCATOR_BASE_URL, impersonate=IMPERSONATE, curl_options=CURL_OPTIONS, timeout=settings.scrape_timeout_seconds
     ) as locator_client:
