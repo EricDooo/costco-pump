@@ -6,7 +6,9 @@ name: costco-pump
 # that ericdoo-infra's Caddy container already publishes (see
 # ../ericdoo-infra/docker-compose.yml -- bring that stack up first so the
 # network exists, or run `docker network create web` before this). `worker`
-# separately reaches *out* to Costco via `egress` -- see below.
+# and `enqueuer` both reach *out* to Costco via `egress` -- see below.
+# (enqueuer needs it too now: it fetches the warehouse ID manifest directly
+# from Costco's site to build the price sweep, not just worker.)
 
 # api, enqueuer, and worker all share one lean image (see api/Dockerfile --
 # the scraper is a plain HTTP client, so there's no heavier browser image to
@@ -65,7 +67,9 @@ services:
           memory: 256m
 
   # Schedules the jobs `worker` consumes -- see enqueuer.py for why this is a
-  # separate process from the worker itself.
+  # separate process from the worker itself. Needs `egress` (on top of
+  # `backend`) same as worker: it fetches the warehouse ID manifest from
+  # Costco's site directly to build the price sweep, not just DB/redis.
   enqueuer:
     <<: *api-image
     command: ["python", "enqueuer.py"]
@@ -80,6 +84,7 @@ services:
         condition: service_started
     networks:
       - backend
+      - egress
     deploy:
       resources:
         limits:
