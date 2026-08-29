@@ -103,8 +103,13 @@ export function MapView() {
   }, [stats, region, regionId])
 
   return (
-    <div>
-      <div className="mx-auto flex max-w-content items-start justify-between gap-4 px-6 pt-8 pb-4">
+    // h-full: fills App.tsx's flex-1 slot (the remaining viewport height
+    // below Header) exactly. flex-col + min-h-0 on the row below is what
+    // lets the map actually claim "the rest of the space" instead of
+    // growing to fit its content and pushing the page into scrolling --
+    // the layout this whole page is now built around (see App.tsx).
+    <div className="flex h-full flex-col overflow-hidden">
+      <div className="mx-auto flex w-full max-w-content flex-shrink-0 items-start justify-between gap-4 px-6 pt-6 pb-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Costco Gas Prices</h1>
           <p className="mt-1 text-sm text-muted">
@@ -128,12 +133,14 @@ export function MapView() {
         </label>
       </div>
 
-      {error && <p className="mx-auto max-w-content px-6 text-sm text-negative">{error}</p>}
+      {error && <p className="mx-auto max-w-content flex-shrink-0 px-6 text-sm text-negative">{error}</p>}
 
       {/* Full-bleed below this point, unlike the rest of the site's
-          max-w-content pages -- a map wants the width. */}
-      <div className="flex flex-col gap-4 px-4 sm:px-6 lg:flex-row lg:items-start">
-        <aside className="flex-shrink-0 space-y-6 lg:w-72">
+          max-w-content pages -- a map wants the width. min-h-0 is load-
+          bearing on a flex child that needs to actually shrink to fit
+          (rather than overflow) instead of growing to its content size. */}
+      <div className="flex min-h-0 flex-1 flex-col gap-4 px-4 pb-4 sm:px-6 lg:flex-row lg:items-stretch">
+        <aside className="max-h-[40vh] flex-shrink-0 space-y-6 overflow-y-auto lg:max-h-none lg:w-72 lg:overflow-y-auto">
           <Sidebar
             region={region}
             regionId={regionId}
@@ -144,7 +151,7 @@ export function MapView() {
           />
         </aside>
 
-        <div className="h-[75vh] min-h-[500px] w-full overflow-hidden rounded-lg border border-border">
+        <div className="min-h-[300px] w-full flex-1 overflow-hidden rounded-lg border border-border">
           {regionStations.length > 0 && (
             <GasMap
               key={region.id}
