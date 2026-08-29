@@ -233,10 +233,16 @@ async def fetch_grid_point(lat: float, lng: float) -> list[dict]:
         return []
 
     ids = [str(loc.get("salesLocationId")) for loc in locations if loc.get("salesLocationId")]
+    # Chunked at PRICE_BATCH_SIZE -- a single grid point can return more
+    # than that many gas warehouses (up to 50 locations total per point),
+    # and one unchunked call here silently lost prices past the 10th, the
+    # same truncation bug fixed in enqueuer.py's batching.
+    prices: dict[str, dict] = {}
     async with AsyncSession(
         base_url=PRICES_BASE_URL, impersonate=IMPERSONATE, curl_options=CURL_OPTIONS, timeout=settings.scrape_timeout_seconds
     ) as prices_client:
-        prices = await _fetch_prices(prices_client, ids)
+        for i in range(0, len(ids), PRICE_BATCH_SIZE):
+            prices.update(await _fetch_prices(prices_client, ids[i : i + PRICE_BATCH_SIZE]))
 
     return [_normalize(loc, prices) for loc in locations]
 
