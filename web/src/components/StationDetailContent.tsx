@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Area, AreaChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import type { PricePoint, StationDetailData, StationSummary } from '../lib/api'
 import type { PriceComparison, PriceComparisons } from '../lib/priceComparisons'
 
@@ -224,6 +224,11 @@ export function StationDetailContent({
       }))
   }, [detail, rangeDays])
 
+  const rangeLow = useMemo(() => {
+    const values = chartData.flatMap((d) => (d.regular !== null ? [d.regular] : []))
+    return values.length ? Math.min(...values) : null
+  }, [chartData])
+
   const changes = useMemo(() => (detail ? deriveChanges(detail.history).slice(0, 12) : []), [detail])
 
   const sevenDayChange = useMemo(() => {
@@ -370,6 +375,14 @@ export function StationDetailContent({
                   fill="url(#premiumFill)"
                   strokeWidth={2}
                 />
+                {rangeLow !== null && (
+                  <ReferenceLine
+                    y={rangeLow}
+                    stroke="#16a34a"
+                    strokeDasharray="4 4"
+                    label={{ value: `${rangeDays}d low: $${rangeLow.toFixed(2)}`, position: 'insideBottomLeft', fill: '#16a34a', fontSize: 10 }}
+                  />
+                )}
               </AreaChart>
             </ResponsiveContainer>
           )}

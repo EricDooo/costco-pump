@@ -16,6 +16,8 @@ export interface StationSummary {
   premium_price: number | null
   diesel_price: number | null
   as_of: string | null
+  /** regular_price at or below its own 7-day low. */
+  is_7d_low: boolean
 }
 
 export interface PricePoint {
@@ -87,6 +89,14 @@ export interface StateChangeStat {
   biggest_move: number
 }
 
+export interface StateFuelStat {
+  state: string
+  avg_regular: number | null
+  avg_premium: number | null
+  avg_diesel: number | null
+  station_count: number
+}
+
 async function getJson<T>(path: string): Promise<T> {
   // no-store: a browser-level cache on top of the API's own short server
   // cache has no upside, and did serve a stale dev response in practice.
@@ -99,12 +109,20 @@ export const api = {
   stations: (state?: string) => getJson<StationSummary[]>(`/stations${state ? `?state=${state}` : ''}`),
   station: (id: number) => getJson<StationDetailData>(`/stations/${id}`),
   statsSummary: () => getJson<StatsSummary>('/stats/summary'),
-  trend: (opts?: { days?: number; state?: string }) => {
+  trend: (opts?: { days?: number; region?: string; state?: string }) => {
     const params = new URLSearchParams()
     if (opts?.days) params.set('days', String(opts.days))
+    if (opts?.region) params.set('region', opts.region)
     if (opts?.state) params.set('state', opts.state)
     const qs = params.toString()
     return getJson<TrendSummary>(`/stats/trend${qs ? `?${qs}` : ''}`)
   },
-  changesByState: (hours?: number) => getJson<StateChangeStat[]>(`/stats/changes-by-state${hours ? `?hours=${hours}` : ''}`),
+  changesByState: (opts?: { hours?: number; region?: string }) => {
+    const params = new URLSearchParams()
+    if (opts?.hours) params.set('hours', String(opts.hours))
+    if (opts?.region) params.set('region', opts.region)
+    const qs = params.toString()
+    return getJson<StateChangeStat[]>(`/stats/changes-by-state${qs ? `?${qs}` : ''}`)
+  },
+  states: (region?: string) => getJson<StateFuelStat[]>(`/stats/states${region ? `?region=${region}` : ''}`),
 }

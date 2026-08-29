@@ -1,7 +1,7 @@
 import datetime as dt
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..cache import get_cached, set_cached
@@ -19,6 +19,22 @@ _latest_time = (
     .group_by(PriceReading.warehouse_id)
     .subquery()
 )
+
+_SEVEN_DAY_LOW_SQL = text(
+    """
+    select warehouse_id, min(regular_price) as low_7d
+    from price_readings
+    where time > now() - interval '7 days' and regular_price is not null
+    group by warehouse_id
+    """
+)
+
+
+def _is_7d_low(current: float | None, low_7d: float | None) -> bool:
+    # <=, not ==: the current reading is itself part of the 7-day window
+    # the min was taken over, so it can never be *below* low_7d -- <=
+    # sidesteps a float/Decimal equality mismatch on the exact same value.
+    return current is not None and low_7d is not None and current <= low_7d
 
 
 @router.get("/stations", response_model=list[StationSummary])
@@ -45,6 +61,7 @@ async def list_stations(
         stmt = stmt.where(Warehouse.state == state.upper())
 
     rows = (await session.execute(stmt)).all()
+    low_by_id = {r["warehouse_id"]: float(r["low_7d"]) for r in (await session.execute(_SEVEN_DAY_LOW_SQL)).mappings()}
     result = [
         StationSummary(
             id=wh.id,
@@ -59,6 +76,9 @@ async def list_stations(
             premium_price=float(pr.premium_price) if pr.premium_price is not None else None,
             diesel_price=float(pr.diesel_price) if pr.diesel_price is not None else None,
             as_of=pr.time,
+            is_7d_low=_is_7d_low(
+                float(pr.regular_price) if pr.regular_price is not None else None, low_by_id.get(wh.id)
+            ),
         )
         for wh, pr in rows
     ]
@@ -86,6 +106,13 @@ async def get_station(
     )
     history = (await session.execute(history_stmt)).scalars().all()
     latest = history[-1] if history else None
+    current_price = float(latest.regular_price) if latest and latest.regular_price is not None else None
+
+    seven_days_ago = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=7)
+    last_7d_prices = [
+        float(r.regular_price) for r in history if r.time >= seven_days_ago and r.regular_price is not None
+    ]
+    low_7d = min(last_7d_prices) if last_7d_prices else None
 
     return StationDetail(
         id=wh.id,
@@ -96,10 +123,11 @@ async def get_station(
         zip_code=wh.zip_code,
         lat=wh.lat,
         lon=wh.lon,
-        regular_price=float(latest.regular_price) if latest and latest.regular_price is not None else None,
+        regular_price=current_price,
         premium_price=float(latest.premium_price) if latest and latest.premium_price is not None else None,
         diesel_price=float(latest.diesel_price) if latest and latest.diesel_price is not None else None,
         as_of=latest.time if latest else None,
+        is_7d_low=_is_7d_low(current_price, low_7d),
         hours=wh.hours,
         gas_hours=wh.gas_hours,
         opened_date=wh.opened_date,

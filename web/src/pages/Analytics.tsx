@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { AllStatesTable } from '../components/AllStatesTable'
 import { StatsHeader } from '../components/StatsHeader'
-import { api, type StateChangeStat, type StateStat, type StatsSummary, type TrendSummary } from '../lib/api'
+import { useRegion } from '../hooks/useRegion'
+import { api, type StateChangeStat, type StateFuelStat, type StatsSummary, type TrendSummary } from '../lib/api'
 import { stateName } from '../lib/stateNames'
 
 const TREND_DAYS = 30
@@ -42,25 +44,6 @@ function ActivityBar({ hikes, cuts }: { hikes: number; cuts: number }) {
         <span className="text-positive">{cuts} cuts</span>
         <span className="text-negative">{hikes} hikes</span>
       </div>
-    </div>
-  )
-}
-
-function StateTable({ title, rows }: { title: string; rows: StateStat[] }) {
-  return (
-    <div className="rounded-lg border border-border bg-surface p-4">
-      <div className="text-xs font-medium text-muted">{title}</div>
-      <ol className="mt-3 space-y-2">
-        {rows.map((s, i) => (
-          <li key={s.state} className="flex items-center justify-between text-sm">
-            <Link to={`/analytics/state/${s.state}`} className="text-foreground hover:text-primary hover:underline">
-              <span className="mr-2 text-muted">{i + 1}</span>
-              {stateName(s.state)}
-            </Link>
-            <span className="font-mono text-muted">${s.avg_regular_price.toFixed(2)}</span>
-          </li>
-        ))}
-      </ol>
     </div>
   )
 }
@@ -184,27 +167,41 @@ export function TrendChart({ trend }: { trend: TrendSummary | null }) {
 }
 
 export function Analytics() {
+  const { regionId, region } = useRegion()
   const [stats, setStats] = useState<StatsSummary | null>(null)
   const [trend, setTrend] = useState<TrendSummary | null>(null)
   const [changesByState, setChangesByState] = useState<StateChangeStat[] | null>(null)
+  const [allStates, setAllStates] = useState<StateFuelStat[] | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    Promise.all([api.statsSummary(), api.trend({ days: TREND_DAYS }), api.changesByState()])
-      .then(([s, t, c]) => {
+    setTrend(null)
+    setChangesByState(null)
+    setAllStates(null)
+    setError(null)
+    const calls = [
+      api.statsSummary(),
+      api.trend({ days: TREND_DAYS, region: regionId }),
+      region.showStateBreakdown ? api.changesByState({ region: regionId }) : Promise.resolve([]),
+      region.showStateBreakdown ? api.states(regionId) : Promise.resolve([]),
+    ] as const
+    Promise.all(calls)
+      .then(([s, t, c, a]) => {
         setStats(s)
         setTrend(t)
         setChangesByState(c)
+        setAllStates(a)
       })
       .catch(() => setError('Could not load live data right now.'))
-  }, [])
+  }, [regionId, region.showStateBreakdown])
 
   return (
     <div className="mx-auto max-w-content px-6 py-12">
       <h1 className="text-2xl font-bold text-foreground">Analytics</h1>
       <p className="mt-2 max-w-2xl text-sm text-muted">
-        Aggregate trends across every tracked warehouse -- national price movement over
-        time, and which US states/Canadian provinces run cheapest and priciest.
+        Aggregate trends for {region.label} -- price movement over time, and which{' '}
+        {region.showStateBreakdown ? 'states/provinces' : 'stations'} run cheapest and priciest. Change the country in
+        the header to see another region.
       </p>
 
       {error && <p className="mt-8 text-sm text-negative">{error}</p>}
@@ -218,14 +215,14 @@ export function Analytics() {
 
           <div className="mt-8 grid grid-cols-1 gap-4 lg:grid-cols-[1fr_240px]">
             <div className="rounded-lg border border-border bg-surface p-4">
-              <div className="text-sm font-bold text-foreground">National trend</div>
+              <div className="text-sm font-bold text-foreground">{region.label} trend</div>
               <p className="text-xs text-muted">
                 Median regular/premium/diesel price across tracked Costco stations -- last {TREND_DAYS} days
               </p>
               {trend?.move !== null && trend?.move !== undefined && (
                 <p className="mt-1 text-xs text-muted">
-                  The national regular median {trend.move >= 0 ? 'rose' : 'fell'} {formatCents(trend.move).replace('+', '').replace('-', '')} over
-                  this window.
+                  The regional regular median {trend.move >= 0 ? 'rose' : 'fell'}{' '}
+                  {formatCents(trend.move).replace('+', '').replace('-', '')} over this window.
                 </p>
               )}
               <TrendChart trend={trend} />
@@ -247,12 +244,12 @@ export function Analytics() {
             </div>
           </div>
 
-          <div className="mt-8">{changesByState && <ChangesByStateTable rows={changesByState} />}</div>
-
-          <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2">
-            <StateTable title="Cheapest (7-day avg)" rows={stats.cheapest_states.slice(0, 5)} />
-            <StateTable title="Priciest (7-day avg)" rows={stats.priciest_states.slice(0, 5)} />
-          </div>
+          {region.showStateBreakdown && (
+            <>
+              <div className="mt-8">{changesByState && <ChangesByStateTable rows={changesByState} />}</div>
+              <div className="mt-8">{allStates && <AllStatesTable rows={allStates} />}</div>
+            </>
+          )}
         </>
       )}
     </div>

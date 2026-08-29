@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { StationList } from '../components/StationList'
+import { StationTable } from '../components/StationTable'
 import { api, type StationSummary, type TrendSummary } from '../lib/api'
+import { CA_PROVINCES } from '../lib/regions'
 import { stateName } from '../lib/stateNames'
 import { TrendChart } from './Analytics'
 
@@ -17,7 +18,7 @@ function formatCents(dollars: number): string {
 }
 
 /** Per-state analytics -- same trend chart as the national page, scoped to
- * one state/province, plus that state's own stations cheapest-first. */
+ * one state/province, plus that state's own stations, searchable/sortable. */
 export function AnalyticsState() {
   const { code } = useParams<{ code: string }>()
   const [trend, setTrend] = useState<TrendSummary | null>(null)
@@ -29,18 +30,14 @@ export function AnalyticsState() {
     setTrend(null)
     setStations(null)
     setError(null)
-    Promise.all([api.trend({ days: TREND_DAYS, state: code }), api.stations(code)])
+    const region = CA_PROVINCES.has(code.toUpperCase()) ? 'ca' : 'us'
+    Promise.all([api.trend({ days: TREND_DAYS, region, state: code }), api.stations(code)])
       .then(([t, s]) => {
         setTrend(t)
         setStations(s)
       })
       .catch(() => setError('Could not load live data right now.'))
   }, [code])
-
-  const sortedStations = useMemo(() => {
-    if (!stations) return []
-    return [...stations].sort((a, b) => (a.regular_price ?? Infinity) - (b.regular_price ?? Infinity))
-  }, [stations])
 
   if (!code) return null
 
@@ -79,10 +76,7 @@ export function AnalyticsState() {
         </div>
       </div>
 
-      <div className="mt-8">
-        <h2 className="text-sm font-bold text-foreground">Stations in {stateName(code.toUpperCase())}</h2>
-        {stations && <StationList stations={sortedStations} />}
-      </div>
+      <div className="mt-8">{stations && <StationTable stations={stations} />}</div>
     </div>
   )
 }
