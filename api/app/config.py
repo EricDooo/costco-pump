@@ -24,10 +24,15 @@ class Settings(BaseSettings):
 
     # How often the enqueuer runs a full grid-based metadata sweep -- the
     # one that discovers new/closed warehouses and refreshes address/hours
-    # (see scraper/client.py's fetch_grid_point). Warehouses open or close
-    # rarely enough that this doesn't need hourly cadence; daily is already
-    # generous, and it's the price sweep above that stays fast/frequent.
-    metadata_sweep_interval_seconds: int = 60 * 60 * 24
+    # (see scraper/client.py's fetch_grid_point, scraper/grid.py for the
+    # ~197 points it now covers -- CONUS grid plus Canada/UK anchors, the
+    # only international regions the locator endpoint actually indexes).
+    # Started at daily, since warehouses open/close rarely; shortened to
+    # every 3 hours once the underlying fetch pipeline proved reliable, so
+    # a full round (previously ~22 hours to cover the whole grid at the
+    # old pace) finishes in under 2 hours instead of trickling in over a
+    # day -- still gentle (~197 points * 0.9 / 3h ≈ one every ~50s).
+    metadata_sweep_interval_seconds: int = 60 * 60 * 3
 
     # Grid spacing in degrees for the lat/lng sweep. Smaller = more overlap,
     # more requests. 3 degrees comfortably covers every CONUS warehouse with a
