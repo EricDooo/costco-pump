@@ -84,6 +84,43 @@ def parse_warehouse(raw: dict) -> dict | None:
     }
 
 
+async def upsert_warehouse_metadata(session: AsyncSession, row: dict, batch_time: dt.datetime) -> None:
+    """Upsert one warehouse's location/metadata/hours only -- no
+    PriceReading write. This is what the US/CA/UK metadata sweep uses now
+    that metadata (warehouses.json) and prices (AjaxGetGasPricesService)
+    come from two separate calls on two separate schedules: writing a
+    PriceReading here too, like upsert_warehouse_and_reading does, would
+    mean every 3-hour metadata round inserts a null-price reading with a
+    timestamp newer than the last real price sweep, silently blanking out
+    the "current price" shown between price sweeps. International
+    countries don't have this problem -- their one API call returns
+    metadata and price together -- so they still use
+    upsert_warehouse_and_reading below.
+    """
+    geom = WKTElement(f"POINT({row['lon']} {row['lat']})", srid=4326)
+    warehouse_values = {k: v for k, v in row.items() if k not in ("regular_price", "premium_price", "diesel_price")}
+    stmt = (
+        pg_insert(Warehouse)
+        .values(**warehouse_values, geom=geom)
+        .on_conflict_do_update(
+            index_elements=[Warehouse.id],
+            set_={
+                "name": row["name"],
+                "address": row["address"],
+                "city": row["city"],
+                "state": row["state"],
+                "zip_code": row["zip_code"],
+                "lat": row["lat"],
+                "lon": row["lon"],
+                "geom": geom,
+                "hours": row["hours"],
+                "updated_at": batch_time,
+            },
+        )
+    )
+    await session.execute(stmt)
+
+
 async def upsert_warehouse_and_reading(session: AsyncSession, row: dict, batch_time: dt.datetime) -> None:
     """Upsert one warehouse's location/metadata/hours and record one price
     reading. `batch_time` is passed in (not `now()` per call) so that
@@ -138,9 +175,9 @@ async def upsert_warehouse_and_reading(session: AsyncSession, row: dict, batch_t
 
 async def filter_known_warehouse_ids(session: AsyncSession, ids: list[int]) -> set[int]:
     """Which of `ids` already have a `warehouses` row -- the price sweep's
-    IDs come from Costco's own site (client.fetch_all_warehouse_ids), not
-    this table, so a batch can include IDs the metadata sweep hasn't
-    created a row for yet. Filtering here rather than letting the FK
+    IDs come from client.fetch_all_warehouses (warehouses.json), not this
+    table, so a batch can include IDs the metadata sweep hasn't created a
+    row for yet. Filtering here rather than letting the FK
     reject them matters: one failed INSERT aborts the whole transaction in
     Postgres, which would silently lose every other valid reading in the
     same batch, not just the unknown one.

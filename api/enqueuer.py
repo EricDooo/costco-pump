@@ -1,35 +1,29 @@
 """Scheduling loop -- the `enqueuer` service's entrypoint.
 
-Two independent schedules, run concurrently:
-  - price sweep (hourly, `sweep_interval_seconds`): prices only, for every
-    warehouse ID Costco's own site lists (scraper/client.py's
-    fetch_all_warehouse_ids -- a static manifest baked into their
-    warehouse-locator page, cached here per warehouse_ids_cache_seconds
-    rather than our own `warehouses` table). Costco's locator caps results
-    at 50/page, which is why the grid-sweep approach existed at all; the
-    price endpoint takes a batch of IDs directly, and this ID source
-    doesn't depend on a grid sweep ever having run -- it works from a
-    completely empty database. ~616 warehouses / 10 per batch (the price
-    endpoint's own silent per-call cap, see client.py's PRICE_BATCH_SIZE)
-    is ~62 jobs, still down from ~184 grid-point jobs -- most of which used
-    to exist only to re-discover IDs we'd already seen.
-  - metadata sweep (daily, `metadata_sweep_interval_seconds`): the original
-    full grid sweep, discovering new/closed warehouses and refreshing
-    address/hours. Still grid-based -- salesLocations.json only takes
-    lat/lng, confirmed there's no per-ID equivalent (salesLocationId as a
-    query param is a 400) -- but it no longer gates the price sweep's ID
-    list the way it used to.
+Three independent schedules, run concurrently:
+  - price sweep (hourly, `sweep_interval_seconds`): US/CA/UK prices only,
+    for every warehouse ID warehouses.json lists (scraper/client.py's
+    fetch_all_warehouses -- one call, no grid, cheap enough to just call
+    fresh every round instead of caching the ID list the way this used to).
+    ~797 warehouses / 10 per batch (the price endpoint's own silent
+    per-call cap, see client.py's PRICE_BATCH_SIZE) is ~80 jobs.
+  - metadata sweep (`metadata_sweep_interval_seconds`): also warehouses.json
+    -- one call returns the whole US/CA/UK database with lastPage:true, so
+    this is a single job, not a grid of ~184 points anymore. Discovers
+    new/closed warehouses and refreshes address/hours; doesn't touch prices
+    (see scraper/jobs.py's refresh_metadata for why).
+  - international sweep (`international_sweep_interval_seconds`): one job
+    per country in scraper/international.py's COUNTRIES, each a full
+    metadata+price refresh via that country's SAP Commerce Cloud API in one
+    call.
 
-Both trickle their enqueue() calls across most of their interval rather
-than dumping everything in at once -- see SPREAD_FRACTION. That matters
-more than it used to: with the old Playwright session, each job took long
-enough on its own that ~184 jobs/hour was naturally spread out. Now that
-scraper/client.py is near-instant (curl_cffi, no browser), enqueuing
-everything at once and letting SimpleWorker drain it back-to-back turns
-"roughly one request every ~20s" into "the whole round's requests in a
-couple of minutes" -- confirmed in production as jobs that silently hung
-with no response at all, the same silent-drop symptom seen everywhere else
-in this project when request volume spikes.
+The price sweep still trickles its batch jobs across most of its interval
+(see SPREAD_FRACTION) -- with scraper/client.py's curl_cffi calls being
+near-instant, enqueuing all ~80 batch jobs at once and letting SimpleWorker
+drain them back-to-back reproduced the exact silent-drop hangs seen
+elsewhere in this project when request volume spikes. Metadata and
+international sweeps don't need pacing: each country/the whole US/CA/UK
+database is one job, so there's nothing to spread out.
 
 This process only enqueues; `worker.py` is what actually does the work.
 Separating them is the point of using a queue at all -- a slow or failed
@@ -41,16 +35,13 @@ import asyncio
 import datetime as dt
 import logging
 
-from app.cache import get_cached, set_cached
 from app.config import settings
 from app.db import init_models
 from app.queue import sweep_queue
-from app.scraper.client import fetch_all_warehouse_ids
-from app.scraper.grid import grid_points
+from app.scraper.client import fetch_all_warehouses
+from app.scraper.international import COUNTRIES
 
 logger = logging.getLogger(__name__)
-
-WAREHOUSE_IDS_CACHE_KEY = "warehouse_ids"
 
 # Fraction of the interval spent trickling jobs in -- not the full interval,
 # so a round that starts slightly late (or a slow job along the way) still
@@ -75,26 +66,14 @@ async def _enqueue_paced(job_name: str, jobs_args: list[tuple], batch_time: str,
             await asyncio.sleep(spacing)
 
 
-async def get_warehouse_ids() -> list[int]:
-    """The cached warehouse ID list, refetching from Costco's site
-    (client.fetch_all_warehouse_ids) only once every
-    warehouse_ids_cache_seconds."""
-    cached = await get_cached(WAREHOUSE_IDS_CACHE_KEY)
-    if cached is not None:
-        return cached
-    ids = await fetch_all_warehouse_ids()
-    if ids:
-        await set_cached(WAREHOUSE_IDS_CACHE_KEY, ids, settings.warehouse_ids_cache_seconds)
-    return ids
-
-
 async def enqueue_price_sweep() -> None:
     # One shared timestamp for the whole round -- see upsert_warehouse_and_reading
     # for why that matters for retries.
     batch_time = dt.datetime.now(dt.timezone.utc).isoformat()
-    ids = await get_warehouse_ids()
+    records = await fetch_all_warehouses()
+    ids = [int(r["warehouseNo"]) for r in records if r["warehouseNo"]]
     if not ids:
-        logger.warning("Couldn't fetch the warehouse ID list -- skipping this price sweep round")
+        logger.warning("Couldn't fetch the warehouse list -- skipping this price sweep round")
         return
 
     batches = [ids[i : i + PRICE_BATCH_SIZE] for i in range(0, len(ids), PRICE_BATCH_SIZE)]
@@ -112,17 +91,22 @@ async def enqueue_price_sweep() -> None:
 
 async def enqueue_metadata_sweep() -> None:
     batch_time = dt.datetime.now(dt.timezone.utc).isoformat()
-    points = grid_points(settings.grid_step_degrees)
-    # Plain HTTP calls (scraper/client.py) finish in a couple seconds
-    # normally; 240s is just headroom for a slow retry chain.
+    # One call covers the entire US/CA/UK database -- see scraper/client.py
+    # -- so this is a single job, not a grid to pace out.
+    sweep_queue.enqueue("app.scraper.jobs.refresh_metadata", batch_time, job_timeout=240)
+    logger.info("Enqueued metadata sweep job (batch %s)", batch_time)
+
+
+async def enqueue_international_sweep() -> None:
+    batch_time = dt.datetime.now(dt.timezone.utc).isoformat()
     await _enqueue_paced(
-        "app.scraper.jobs.scrape_grid_point",
-        points,
+        "app.scraper.jobs.refresh_international_country",
+        list(COUNTRIES),
         batch_time,
-        settings.metadata_sweep_interval_seconds,
-        job_timeout=240,
+        settings.international_sweep_interval_seconds,
+        job_timeout=120,
     )
-    logger.info("Enqueued %d metadata sweep jobs (batch %s)", len(points), batch_time)
+    logger.info("Enqueued %d international sweep jobs (batch %s)", len(COUNTRIES), batch_time)
 
 
 async def _schedule(name: str, run_round, interval_seconds: float) -> None:
@@ -145,6 +129,7 @@ async def main() -> None:
     await asyncio.gather(
         _schedule("price sweep", enqueue_price_sweep, settings.sweep_interval_seconds),
         _schedule("metadata sweep", enqueue_metadata_sweep, settings.metadata_sweep_interval_seconds),
+        _schedule("international sweep", enqueue_international_sweep, settings.international_sweep_interval_seconds),
     )
 
 

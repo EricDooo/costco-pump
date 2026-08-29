@@ -1,45 +1,45 @@
 """Fetch against Costco's public warehouse-locator and gas-price APIs --
-what the live sweep job uses, and all it's ever needed.
+what the live sweep job uses, and all it's ever needed. Two calls, that's it:
 
-The old locator endpoint this module used to call (AjaxWarehouseBrowseLookupView)
-is gone -- Costco rebuilt the site's frontend and replaced it with two separate
-public endpoints, found by reading the API-route manifest embedded in the
-site's own JS bundle (the same way a browser's dev tools would show it):
-
-  - ecom-api.costco.com/core/warehouse-locator/v1/salesLocations.json --
-    location, hours, and services (including whether a warehouse has a gas
-    station) by lat/lng. Same 50-results-per-page cap as the old endpoint,
-    so the same grid-sweep approach in grid.py still applies. The
-    `client-identifier` header below isn't a secret -- it's the same public
-    tag the site's own frontend sends, lifted straight from that manifest.
+  - ecom-api.costco.com/core/warehouse-locator/v1/warehouses.json --
+    every US/Canada/UK warehouse in ONE call. The API-route manifest
+    embedded in the site's own JS bundle only documented this endpoint's
+    sibling, salesLocations.json -- lat/lng-based, capped at 50 results a
+    page, which is why this project spent a whole night building a
+    geographic grid-sweep system around it. warehouses.json was never
+    mentioned in that manifest at all; found by trying plausible parameter
+    names against it directly. It paginates by plain `offset`/`limit`
+    instead of lat/lng, and asking for limit=1000 just returns all 797
+    warehouses with lastPage:true in one shot -- no grid, no per-point
+    fetching, no pacing needed for metadata at all anymore.
   - www.costco.com/AjaxGetGasPricesService -- live prices, batched by
-    warehouse ID (`_`-joined, same delimiter Costco's own frontend uses).
+    warehouse ID (`_`-joined). Silently caps its response at 10 no matter
+    how many IDs are requested -- confirmed empirically (asked for 10, 15,
+    20, 25 in one call; got exactly 10 back every time, no truncation
+    flag, no error).
 
-A third source, not an API call at all: www.costco.com/w/-/locations's own
-page bundle embeds a static manifest of every warehouse ID Costco has (see
-ID_MANIFEST_PATH below). That's the price sweep's ID source now, cached
-rather than re-derived from the grid every time -- see
-fetch_all_warehouse_ids.
+Neither sits behind Akamai's bot-management gate the old (now-dead)
+locator endpoint did -- confirmed no WAF block, no JS-sensor challenge,
+both fully public and unauthenticated. What they DO have: a plain `httpx`
+request to either one just times out with no response at all, while the
+identical request succeeds instantly through curl, or through curl_cffi
+(below) impersonating a real browser's TLS handshake. That's a
+client-fingerprint filter on Costco's edge somewhere, not an active
+bot-detection system with a challenge to solve -- there's nothing to
+defeat, just a TLS handshake that needs to look like a browser's to get a
+response at all. Hence curl_cffi instead of httpx here, unlike the rest of
+this project.
 
-Neither sits behind Akamai's bot-management gate the old endpoint did --
-confirmed no WAF block, no JS-sensor challenge, both fully public and
-unauthenticated. What they DO have: a plain `httpx` request to either one
-just times out with no response at all, while the identical request
-succeeds instantly through curl, or through curl_cffi (below) impersonating
-a real browser's TLS handshake. That's a client-fingerprint filter on
-Costco's edge somewhere, not an active bot-detection system with a
-challenge to solve -- there's nothing to defeat, just a TLS handshake that
-needs to look like a browser's to get a response at all. Hence curl_cffi
-instead of httpx here, unlike the rest of this project.
-
-Two calls instead of one means this module does its own merge (_normalize)
-to hand ingest.parse_warehouse the same flat shape it always has -- see
-ingest.py, which didn't need to change at all for this swap.
+This only covers US, Canada, and UK warehouses -- confirmed the only
+countries this system actually indexes (querying near Mexico, Japan,
+Korea, Taiwan, Australia, Spain, France, or Iceland all fall back to the
+nearest indexed country's warehouses instead of returning nothing).
+Everywhere else Costco operates runs on a completely separate platform
+(SAP Commerce Cloud, its own complete-in-one-call REST API per country,
+prices included) -- out of scope here.
 """
 
-import asyncio
 import logging
-import re
 from typing import Any
 
 from curl_cffi.const import CurlIpResolve, CurlOpt
@@ -47,44 +47,26 @@ from curl_cffi.requests import AsyncSession
 from curl_cffi.requests.exceptions import RequestException
 
 from ..config import settings
-from .grid import grid_points
 
 logger = logging.getLogger(__name__)
 
 LOCATOR_BASE_URL = "https://ecom-api.costco.com"
-LOCATOR_PATH = "/core/warehouse-locator/v1/salesLocations.json"
-# Public client tag Costco's own frontend sends with this call -- see the
-# module docstring; not a credential, just an identifier for their routing.
+WAREHOUSES_PATH = "/core/warehouse-locator/v1/warehouses.json"
+# Public client tag Costco's own frontend sends with this call -- not a
+# credential, just an identifier for their routing; lifted from the
+# API-route manifest embedded in the site's JS bundle.
 LOCATOR_CLIENT_ID = "7c71124c-7bf1-44db-bc9d-498584cd66e5"
+# High enough to cover the whole database in one page -- confirmed 797
+# total warehouses, lastPage:true at this limit (see fetch_all_warehouses,
+# which logs a warning if that ever stops being true -- Costco's US/CA/UK
+# footprint growing past this would mean warehouses silently go missing
+# rather than erroring, so that log line is the only thing that would
+# catch it).
+WAREHOUSES_LIMIT = 1000
 
 PRICES_BASE_URL = "https://www.costco.com"
 PRICES_PATH = "/AjaxGetGasPricesService"
-# The endpoint silently caps its response at 10 warehouses, no matter how
-# many IDs the request asks for -- confirmed empirically (requested 10, 15,
-# 20, 25; got exactly 10 back every time, no truncation flag, no error).
-# Costco's own frontend sends far more IDs than that in one call (~50, seen
-# in real browser traffic), so either their page silently eats the same
-# loss and doesn't care, or something else about a real session's request
-# gets more through -- either way, asking for more than 10 here just means
-# warehouses past the 10th in a batch silently keep last-known (or no)
-# price data forever, which is exactly what happened to real warehouses in
-# production before this was caught.
 PRICE_BATCH_SIZE = 10
-
-# The full warehouse-locations page -- any query string, any path under
-# /w/-/locations, returns the identical Next.js bundle (confirmed: same
-# byte count, same content, regardless of location) -- so this is fetched
-# with no query at all. Buried in it is a static manifest of every
-# warehouse Costco has, as `<id>-wh` slugs (a routing/typeahead list, not
-# per-warehouse data -- no address or coordinates, just IDs). That's the
-# authoritative ID source now (see get_warehouse_ids in enqueuer.py's
-# caller), replacing the grid as how the price sweep knows what to ask
-# AjaxGetGasPricesService for. The grid still exists (fetch_grid_point/
-# sweep below) because address/lat-lon/hours only come from
-# salesLocations.json, which takes lat/lng, not an ID -- confirmed by
-# testing salesLocationId as a query param directly (400 Bad Request).
-ID_MANIFEST_PATH = "/w/-/locations"
-ID_MANIFEST_PATTERN = re.compile(r"(\d{1,6})-wh")
 
 HEADERS = {
     "Accept": "application/json",
@@ -111,31 +93,74 @@ IMPERSONATE = "chrome131"
 # `egress` network and watching CurlIpResolve.V4 fix it in place.
 CURL_OPTIONS = {CurlOpt.IPRESOLVE: CurlIpResolve.V4}
 
-MAX_ATTEMPTS = 3
+
+def _has_gas(warehouse: dict) -> bool:
+    return any(s.get("code") == "gas" for s in warehouse.get("services") or [])
 
 
-def _has_gas(location: dict) -> bool:
-    return any(s.get("code") == "gas" for s in location.get("services") or [])
+def _format_hours(warehouse: dict) -> list[str] | None:
+    entries = warehouse.get("hours") or []
+    lines = []
+    for h in entries:
+        title = (h.get("title") or [{}])[0].get("value", "")
+        open_, close = h.get("open"), h.get("close")
+        if title and open_ and close:
+            lines.append(f"{title}: {open_}-{close}")
+    return lines or None
 
 
-async def _fetch_locations(client: AsyncSession, lat: float, lng: float) -> list[dict]:
-    """One grid point's nearby sales locations, with retry+backoff --
-    filtered down to warehouses that actually have a gas station."""
-    params = {"latitude": lat, "longitude": lng, "limit": 50}
+def _normalize(warehouse: dict, prices: dict[str, dict]) -> dict:
+    """Flatten one warehouses.json entry (+ its matched price batch entry,
+    if any) into the flat shape ingest.parse_warehouse expects -- same
+    field names the old Costco payload used, so ingest.py needed no
+    changes across any of tonight's rewrites."""
+    address = warehouse.get("address") or {}
+    wid = str(warehouse.get("warehouseId") or "")
+    price = prices.get(wid) or {}
+    name: list[dict[str, Any]] = warehouse.get("name") or []
+    return {
+        "warehouseNo": wid,
+        "warehouseName": (name[0].get("value") if name else None) or f"Costco #{wid}",
+        "address1": address.get("line1"),
+        "city": address.get("city"),
+        "state": address.get("territory"),
+        "zipCode": address.get("postalCode"),
+        "latitude": address.get("latitude"),
+        "longitude": address.get("longitude"),
+        "regularPrice": price.get("regular"),
+        "premiumPrice": price.get("premium"),
+        "dieselPrice": price.get("diesel"),
+        "hours": _format_hours(warehouse),
+    }
+
+
+async def fetch_all_warehouses() -> list[dict]:
+    """Every US/Canada/UK gas-station warehouse, normalized and ready for
+    ingest.parse_warehouse -- one call, no grid, no prices (that's the
+    separate, batched price sweep's job; see fetch_prices below). This is
+    what both scraper/jobs.py's refresh_metadata (upserts location/hours)
+    and enqueuer.py's price sweep (just needs the ID list) call."""
     headers = {**HEADERS, "client-identifier": LOCATOR_CLIENT_ID}
-    for attempt in range(1, MAX_ATTEMPTS + 1):
+    async with AsyncSession(
+        base_url=LOCATOR_BASE_URL, impersonate=IMPERSONATE, curl_options=CURL_OPTIONS, timeout=settings.scrape_timeout_seconds
+    ) as client:
         try:
-            resp = await client.get(LOCATOR_PATH, params=params, headers=headers)
+            resp = await client.get(WAREHOUSES_PATH, params={"offset": 0, "limit": WAREHOUSES_LIMIT}, headers=headers)
             resp.raise_for_status()
-            data = resp.json()
-            locations = data.get("salesLocations") or []
-            return [loc for loc in locations if _has_gas(loc)]
-        except (RequestException, ValueError) as exc:
-            if attempt == MAX_ATTEMPTS:
-                logger.warning("Giving up on grid point %s,%s: %s", lat, lng, exc)
-                return []
-            await asyncio.sleep(0.5 * attempt)
-    return []
+        except RequestException as exc:
+            logger.warning("Failed to fetch the warehouse list: %s", exc)
+            return []
+
+    data = resp.json()
+    if not data.get("context", {}).get("lastPage"):
+        logger.warning(
+            "warehouses.json didn't report lastPage=true at limit=%d -- Costco's US/CA/UK footprint may have grown "
+            "past this page size; some warehouses could be silently missing from this sweep",
+            WAREHOUSES_LIMIT,
+        )
+
+    warehouses = [w for w in (data.get("warehouses") or []) if _has_gas(w)]
+    return [_normalize(w, {}) for w in warehouses]
 
 
 async def _fetch_prices(client: AsyncSession, ids: list[str]) -> dict[str, dict]:
@@ -153,127 +178,25 @@ async def _fetch_prices(client: AsyncSession, ids: list[str]) -> dict[str, dict]
         return {}
 
 
-def _format_hours(location: dict) -> list[str] | None:
-    entries = location.get("hours") or []
-    lines = []
-    for h in entries:
-        title = (h.get("title") or [{}])[0].get("value", "")
-        open_, close = h.get("open"), h.get("close")
-        if title and open_ and close:
-            lines.append(f"{title}: {open_}-{close}")
-    return lines or None
-
-
-def _normalize(location: dict, prices: dict[str, dict]) -> dict:
-    """Flatten one salesLocations entry (+ its matched price batch entry,
-    if any) into the flat shape ingest.parse_warehouse expects -- same field
-    names the old Costco payload used, so ingest.py needed no changes."""
-    address = location.get("address") or {}
-    wid = str(location.get("salesLocationId") or "")
-    price = prices.get(wid) or {}
-    name: list[dict[str, Any]] = location.get("name") or []
-    return {
-        "warehouseNo": wid,
-        "warehouseName": (name[0].get("value") if name else None) or f"Costco #{wid}",
-        "address1": address.get("line1"),
-        "city": address.get("city"),
-        "state": address.get("territory"),
-        "zipCode": address.get("postalCode"),
-        "latitude": address.get("latitude"),
-        "longitude": address.get("longitude"),
-        "regularPrice": price.get("regular"),
-        "premiumPrice": price.get("premium"),
-        "dieselPrice": price.get("diesel"),
-        "hours": _format_hours(location),
-    }
-
-
-async def fetch_all_warehouse_ids() -> list[int]:
-    """Every warehouse ID Costco's own site knows about -- see
-    ID_MANIFEST_PATH's comment above for where this comes from. Cached by
-    the caller (enqueuer.py, via app.cache) rather than re-fetched every
-    sweep; warehouse counts change rarely enough that a fresh page load
-    each time would be wasted work, not freshness."""
-    async with AsyncSession(
-        base_url=PRICES_BASE_URL, impersonate=IMPERSONATE, curl_options=CURL_OPTIONS, timeout=settings.scrape_timeout_seconds
-    ) as client:
-        try:
-            resp = await client.get(ID_MANIFEST_PATH, headers=HEADERS)
-            resp.raise_for_status()
-        except RequestException as exc:
-            logger.warning("Failed to fetch the warehouse ID manifest: %s", exc)
-            return []
-    ids = {int(m) for m in ID_MANIFEST_PATTERN.findall(resp.text)}
-    return sorted(ids)
-
-
 async def fetch_prices(ids: list[str]) -> dict[str, dict]:
-    """Live prices for a batch of already-known warehouse IDs (at most
-    PRICE_BATCH_SIZE -- enqueuer.py splits the full ID list into batches
-    this size, one job per batch). This is the fast, frequent hourly path:
-    no locator call at all -- see fetch_all_warehouse_ids for where the IDs
-    come from instead."""
+    """Live prices for a batch of warehouse IDs (at most PRICE_BATCH_SIZE
+    -- enqueuer.py splits the full ID list into batches this size, one job
+    per batch)."""
     async with AsyncSession(
         base_url=PRICES_BASE_URL, impersonate=IMPERSONATE, curl_options=CURL_OPTIONS, timeout=settings.scrape_timeout_seconds
     ) as client:
         return await _fetch_prices(client, ids)
 
 
-async def fetch_grid_point(lat: float, lng: float) -> list[dict]:
-    """One grid point, fully resolved: nearby gas warehouses plus their
-    current prices, normalized and ready for ingest.parse_warehouse. This is
-    the metadata-sweep path (scraper/jobs.py's scrape_grid_point) --
-    discovers new/closed warehouses and refreshes address/hours, run daily
-    rather than hourly (see enqueuer.py)."""
-    async with AsyncSession(
-        base_url=LOCATOR_BASE_URL, impersonate=IMPERSONATE, curl_options=CURL_OPTIONS, timeout=settings.scrape_timeout_seconds
-    ) as locator_client:
-        locations = await _fetch_locations(locator_client, lat, lng)
-    if not locations:
-        return []
-
-    ids = [str(loc.get("salesLocationId")) for loc in locations if loc.get("salesLocationId")]
-    # Chunked at PRICE_BATCH_SIZE -- a single grid point can return more
-    # than that many gas warehouses (up to 50 locations total per point),
-    # and one unchunked call here silently lost prices past the 10th, the
-    # same truncation bug fixed in enqueuer.py's batching.
-    prices: dict[str, dict] = {}
-    async with AsyncSession(
-        base_url=PRICES_BASE_URL, impersonate=IMPERSONATE, curl_options=CURL_OPTIONS, timeout=settings.scrape_timeout_seconds
-    ) as prices_client:
-        for i in range(0, len(ids), PRICE_BATCH_SIZE):
-            prices.update(await _fetch_prices(prices_client, ids[i : i + PRICE_BATCH_SIZE]))
-
-    return [_normalize(loc, prices) for loc in locations]
-
-
 async def sweep() -> list[dict]:
-    """Fetch every grid point in-process and return deduplicated, normalized
-    records. Manual/dry-run use only -- the hourly production path enqueues
-    one job per point instead (see scraper/jobs.py + enqueuer.py). Batches
-    price lookups across the whole deduplicated ID set rather than per grid
-    point, since this path isn't split across separate jobs anyway.
+    """Fetch every warehouse plus its current price in one pass, normalized.
+    Manual/dry-run use only -- the hourly production path runs metadata and
+    price refreshes as two separate, independent jobs instead (see
+    scraper/jobs.py + enqueuer.py).
     """
-    points = grid_points(settings.grid_step_degrees)
-    semaphore = asyncio.Semaphore(settings.scrape_concurrency)
+    records = await fetch_all_warehouses()
+    ids = [r["warehouseNo"] for r in records if r["warehouseNo"]]
 
-    async def _bounded(client: AsyncSession, lat: float, lng: float) -> list[dict]:
-        async with semaphore:
-            return await _fetch_locations(client, lat, lng)
-
-    async with AsyncSession(
-        base_url=LOCATOR_BASE_URL, impersonate=IMPERSONATE, curl_options=CURL_OPTIONS, timeout=settings.scrape_timeout_seconds
-    ) as client:
-        results = await asyncio.gather(*(_bounded(client, lat, lng) for lat, lng in points))
-
-    seen: dict[str, dict] = {}
-    for batch in results:
-        for loc in batch:
-            wid = str(loc.get("salesLocationId") or "")
-            if wid:
-                seen.setdefault(wid, loc)
-
-    ids = list(seen.keys())
     prices: dict[str, dict] = {}
     async with AsyncSession(
         base_url=PRICES_BASE_URL, impersonate=IMPERSONATE, curl_options=CURL_OPTIONS, timeout=settings.scrape_timeout_seconds
@@ -281,8 +204,11 @@ async def sweep() -> list[dict]:
         for i in range(0, len(ids), PRICE_BATCH_SIZE):
             prices.update(await _fetch_prices(client, ids[i : i + PRICE_BATCH_SIZE]))
 
-    logger.info(
-        "Sweep complete: %d grid points, %d unique gas warehouses, %d with prices",
-        len(points), len(seen), len(prices),
-    )
-    return [_normalize(loc, prices) for loc in seen.values()]
+    for r in records:
+        p = prices.get(r["warehouseNo"]) or {}
+        r["regularPrice"] = p.get("regular")
+        r["premiumPrice"] = p.get("premium")
+        r["dieselPrice"] = p.get("diesel")
+
+    logger.info("Sweep complete: %d gas warehouses, %d with prices", len(records), len(prices))
+    return records

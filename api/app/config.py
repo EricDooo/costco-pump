@@ -7,40 +7,30 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://gas:gas@localhost:5432/gas"
     redis_url: str = "redis://localhost:6379/0"
 
-    # How often the enqueuer schedules a fresh price sweep, in seconds --
-    # reads warehouse IDs from Costco's own site (see
-    # scraper/client.py's fetch_all_warehouse_ids, cached per
-    # warehouse_ids_cache_seconds below) rather than rediscovering them via
-    # the grid every time, so this can run often without hammering the
-    # locator endpoint at all.
+    # How often the enqueuer schedules a fresh US/CA/UK price sweep, in
+    # seconds -- reads warehouse IDs straight off warehouses.json (see
+    # scraper/client.py's fetch_all_warehouses) rather than a cached
+    # manifest, since that call is cheap enough to just make every round.
     sweep_interval_seconds: int = 60 * 60
 
-    # How long the warehouse ID list (fetch_all_warehouse_ids) is cached
-    # for before the price sweep re-fetches it. Warehouse counts change
-    # rarely; a day between refetches is already generous, not a
-    # correctness concern -- a brand new warehouse just doesn't get price
-    # readings until the next refetch.
-    warehouse_ids_cache_seconds: int = 60 * 60 * 24
-
-    # How often the enqueuer runs a full grid-based metadata sweep -- the
-    # one that discovers new/closed warehouses and refreshes address/hours
-    # (see scraper/client.py's fetch_grid_point, scraper/grid.py for the
-    # ~197 points it now covers -- CONUS grid plus Canada/UK anchors, the
-    # only international regions the locator endpoint actually indexes).
-    # Started at daily, since warehouses open/close rarely; shortened to
-    # every 3 hours once the underlying fetch pipeline proved reliable, so
-    # a full round (previously ~22 hours to cover the whole grid at the
-    # old pace) finishes in under 2 hours instead of trickling in over a
-    # day -- still gentle (~197 points * 0.9 / 3h ≈ one every ~50s).
+    # How often the enqueuer runs a full US/CA/UK metadata sweep -- the one
+    # that discovers new/closed warehouses and refreshes address/hours (see
+    # scraper/client.py's fetch_all_warehouses, one call to
+    # warehouses.json?offset=0&limit=1000 covering the whole database, no
+    # grid). Started at daily, since warehouses open/close rarely;
+    # shortened to every 3 hours once the underlying fetch pipeline proved
+    # reliable -- cheap now that it's one HTTP call instead of ~184 grid
+    # points, so there's no real cost to running it more often.
     metadata_sweep_interval_seconds: int = 60 * 60 * 3
 
-    # Grid spacing in degrees for the lat/lng sweep. Smaller = more overlap,
-    # more requests. 3 degrees comfortably covers every CONUS warehouse with a
-    # 50-result page size.
-    grid_step_degrees: int = 3
+    # How often the enqueuer refreshes the international countries (see
+    # scraper/international.py) -- one job per country, each a combined
+    # metadata+price call via that country's SAP Commerce Cloud API. Same
+    # cadence as the US/CA/UK metadata sweep by default; kept as its own
+    # setting since the two schedules cover unrelated platforms and may
+    # want different intervals later.
+    international_sweep_interval_seconds: int = 60 * 60 * 3
 
-    # Bounded concurrency for the sweep, and how long each response is cached.
-    scrape_concurrency: int = 6
     scrape_timeout_seconds: float = 30.0
 
     stats_cache_seconds: int = 300

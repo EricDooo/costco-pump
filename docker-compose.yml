@@ -7,8 +7,9 @@ name: costco-pump
 # ../ericdoo-infra/docker-compose.yml -- bring that stack up first so the
 # network exists, or run `docker network create web` before this). `worker`
 # and `enqueuer` both reach *out* to Costco via `egress` -- see below.
-# (enqueuer needs it too now: it fetches the warehouse ID manifest directly
-# from Costco's site to build the price sweep, not just worker.)
+# (enqueuer needs it too: it calls warehouses.json directly to build the
+# US/CA/UK price sweep's ID list, plus one SAP Commerce Cloud call per
+# international country, not just worker.)
 
 # api, enqueuer, and worker all share one lean image (see api/Dockerfile --
 # the scraper is a plain HTTP client, so there's no heavier browser image to
@@ -68,8 +69,9 @@ services:
 
   # Schedules the jobs `worker` consumes -- see enqueuer.py for why this is a
   # separate process from the worker itself. Needs `egress` (on top of
-  # `backend`) same as worker: it fetches the warehouse ID manifest from
-  # Costco's site directly to build the price sweep, not just DB/redis.
+  # `backend`) same as worker: it calls Costco's warehouses.json and each
+  # international country's SAP API directly to build the sweeps, not just
+  # DB/redis.
   enqueuer:
     <<: *api-image
     command: ["python", "enqueuer.py"]

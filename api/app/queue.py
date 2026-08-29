@@ -1,7 +1,8 @@
 """Redis-backed job queue (RQ) that decouples scheduling from execution.
 
-One job per grid point, enqueued hourly by enqueuer.py. That's the actual
-payoff of a queue here -- a failed or slow point doesn't block the others,
+Price-batch, metadata, and international-country jobs, enqueued by
+enqueuer.py on their own schedules (see that module). That's the actual
+payoff of a queue here -- a failed or slow job doesn't block the others,
 RQ retries it independently, and more `worker` replicas can be added later
 to drain the queue faster without any code change.
 """

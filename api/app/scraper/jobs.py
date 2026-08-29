@@ -1,14 +1,24 @@
 """RQ job functions -- each call is one unit of work pulled off the queue.
 
-Two job types, matching enqueuer.py's two schedules:
-  - refresh_price_batch: the fast, hourly path. Prices only, for a batch of
-    warehouse IDs read from Costco's own site -- no locator call, no grid.
-    Some IDs in a batch may not have a `warehouses` row yet (a brand new
-    warehouse the metadata sweep hasn't reached), so this filters against
-    the DB first rather than letting the FK reject them one at a time --
-    see ingest.filter_known_warehouse_ids.
-  - scrape_grid_point: the slow, daily path. Full metadata sweep that
-    discovers new/closed warehouses and refreshes address/hours.
+Three job types, matching enqueuer.py's three schedules:
+  - refresh_price_batch: the fast, hourly path. US/CA/UK prices only, for a
+    batch of warehouse IDs read off warehouses.json -- no locator call, no
+    grid. Some IDs in a batch may not have a `warehouses` row yet (a brand
+    new warehouse the metadata sweep hasn't reached), so this filters
+    against the DB first rather than letting the FK reject them one at a
+    time -- see ingest.filter_known_warehouse_ids.
+  - refresh_metadata: the slow-ish path for US/CA/UK. One call to
+    warehouses.json (no grid, no pagination -- see scraper/client.py's
+    module docstring), upserting every warehouse's location/hours. Doesn't
+    touch price_readings -- see ingest.upsert_warehouse_metadata for why
+    combining metadata and price writes here would be actively wrong now
+    that they're two separate calls.
+  - refresh_international_country: one country's full metadata+price
+    refresh via the SAP Commerce Cloud API (scraper/international.py) --
+    unlike the US/CA/UK split above, this DOES combine metadata and price
+    in one upsert, because the SAP API itself returns both together in one
+    call, so there's no stale-null-price risk the way there is for the
+    warehouses.json path.
 
 Each is a plain sync callable (SimpleWorker's contract) that does one
 `asyncio.run()` covering both the curl_cffi fetch and the DB write. That's
@@ -29,16 +39,24 @@ import datetime as dt
 import logging
 
 from ..db import SessionLocal
-from .client import fetch_grid_point, fetch_prices
-from .ingest import filter_known_warehouse_ids, parse_warehouse, upsert_price_reading, upsert_warehouse_and_reading
+from . import international
+from .client import fetch_all_warehouses, fetch_prices
+from .ingest import (
+    filter_known_warehouse_ids,
+    parse_warehouse,
+    upsert_price_reading,
+    upsert_warehouse_and_reading,
+    upsert_warehouse_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def refresh_price_batch(ids: list[int], batch_time: str) -> int:
-    """Price sweep job: fetch current prices for a batch of warehouse IDs
-    and record one reading each. No location/metadata touched -- see
-    scraper/jobs.py's module docstring and ingest.upsert_price_reading."""
+    """Price sweep job: fetch current prices for a batch of US/CA/UK
+    warehouse IDs and record one reading each. No location/metadata
+    touched -- see scraper/jobs.py's module docstring and
+    ingest.upsert_price_reading."""
     return asyncio.run(_refresh_price_batch(ids, dt.datetime.fromisoformat(batch_time)))
 
 
@@ -61,15 +79,38 @@ async def _refresh_price_batch(ids: list[int], batch_time: dt.datetime) -> int:
     return count
 
 
-def scrape_grid_point(lat: float, lng: float, batch_time: str) -> int:
-    """Metadata sweep job: fetch one grid point, upsert every warehouse it
-    returned (price, location, and hours -- all come from the same
-    normalized record, see scraper/client.py)."""
-    return asyncio.run(_scrape_grid_point(lat, lng, dt.datetime.fromisoformat(batch_time)))
+def refresh_metadata(batch_time: str) -> int:
+    """US/CA/UK metadata sweep job: one call to warehouses.json, upsert
+    every gas warehouse's location/hours. See module docstring for why
+    this deliberately doesn't write price_readings."""
+    return asyncio.run(_refresh_metadata(dt.datetime.fromisoformat(batch_time)))
 
 
-async def _scrape_grid_point(lat: float, lng: float, batch_time: dt.datetime) -> int:
-    raw_warehouses = await fetch_grid_point(lat, lng)
+async def _refresh_metadata(batch_time: dt.datetime) -> int:
+    raw_warehouses = await fetch_all_warehouses()
+
+    count = 0
+    async with SessionLocal() as session:
+        for raw in raw_warehouses:
+            row = parse_warehouse(raw)
+            if row is None:
+                continue
+            await upsert_warehouse_metadata(session, row, batch_time)
+            count += 1
+        await session.commit()
+    return count
+
+
+def refresh_international_country(country: str, domain: str, offset: int, batch_time: str) -> int:
+    """International sweep job: one country's full metadata+price refresh
+    via the SAP Commerce Cloud API (scraper/international.py). Unlike the
+    US/CA/UK jobs above, this writes both metadata and a price reading in
+    one upsert -- see module docstring."""
+    return asyncio.run(_refresh_international_country(country, domain, offset, dt.datetime.fromisoformat(batch_time)))
+
+
+async def _refresh_international_country(country: str, domain: str, offset: int, batch_time: dt.datetime) -> int:
+    raw_warehouses = await international.fetch_country(country, domain, offset)
 
     count = 0
     async with SessionLocal() as session:
