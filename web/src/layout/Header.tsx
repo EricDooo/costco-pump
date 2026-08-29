@@ -13,14 +13,8 @@ export function Header() {
   const { toggle } = useTheme()
 
   return (
-    // w-full: on the map page, App.tsx makes this a flex item (column
-    // direction) so the routed content below can claim "the rest of the
-    // viewport height" -- a flex item's cross-axis (width, here) doesn't
-    // stretch to fill when it also has auto margins (mx-auto), it sizes to
-    // content and centers within that instead. w-full first, then mx-auto
-    // + max-w-content center the actual content block inside that full
-    // width the same way it always has on every other (non-flex-parent)
-    // page.
+    // w-full: as a flex item (App.tsx's map-page column) this won't stretch
+    // to fill on its own when it also has auto margins (mx-auto).
     <header className="mx-auto flex w-full max-w-content items-center justify-between px-4 py-3 sm:px-6 sm:py-4">
       <div className="flex items-center gap-6">
         <span className="font-mono text-sm font-bold text-foreground">⛽ costco-pump</span>

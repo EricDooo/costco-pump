@@ -12,14 +12,8 @@ interface RegionSummary {
   highest: StationSummary & { regular_price: number }
 }
 
-/** The map page's left panel -- two views, switched by whether a station is
- * selected, never a route change or a full-page navigation. Kept as one
- * component (rather than each view managing its own visibility) so that
- * switching between them is a single synchronous render, not a fetch-then-
- * swap that would otherwise flash a blank/loading state in between -- see
- * StationPanel's own `station` prop for the other half of that: it always
- * has the already-loaded summary row to render immediately, even before
- * its own history fetch resolves. */
+/** Map page's left panel -- national summary or a selected station,
+ * switched in place (no route change, no loading flash). */
 export function Sidebar({
   region,
   regionId,

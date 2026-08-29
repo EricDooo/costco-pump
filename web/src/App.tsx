@@ -12,14 +12,8 @@ import { StationDetail } from './pages/StationDetail'
 const MapView = lazy(() => import('./pages/MapView').then((m) => ({ default: m.MapView })))
 
 function App() {
-  // The map page fills the viewport exactly -- Header takes its natural
-  // height, the routed content becomes the remaining flex space, and
-  // nothing at the page level scrolls (the map fills that space; the
-  // sidebar scrolls internally if its content is taller than that, see
-  // MapView.tsx). No footer here either, same reasoning most map apps
-  // (Google Maps included) don't have one on the map screen itself --
-  // every other route keeps the normal document-flow scrolling page +
-  // footer layout, unaffected.
+  // The map page fills the viewport exactly and never scrolls itself (see
+  // MapView.tsx) -- every other route keeps the normal scrolling + footer layout.
   const isMapRoute = useLocation().pathname === '/'
 
   return (

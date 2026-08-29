@@ -18,23 +18,12 @@ const SOURCE_ID = 'protomaps'
 const STATIONS_SOURCE_ID = 'stations'
 const GLYPHS_URL = 'https://protomaps.github.io/basemaps-assets/fonts/{fontstack}/{range}.pbf'
 const LABEL_FONT = 'Noto Sans Regular'
-// The basemap's own POI icons (town/capital dots, etc -- unrelated to the
-// price pills below) come from a sprite sheet, one per flavor. Missing
-// this was a real bug: every place-label layer that references an icon
-// logged "Image ... could not be loaded" (harmless on its own -- those
-// layers just render text with no icon -- but worth fixing since it's
-// what the official style expects).
+// protomaps-assets has no true Bold glyph (only Regular/Medium/Italic) --
+// Medium is the heaviest weight actually available.
+const PILL_FONT = 'Noto Sans Medium'
 
-// Individual stations render as a price-tag pill (a rounded badge with a
-// small pointer tail, like GasBuddy/most real gas-price maps) instead of a
-// plain dot -- shows the actual price at a glance, no click needed. Each
-// tier is a separately pre-rendered image (see makePillImage) registered
-// with the map once at load; icon-image below picks one per feature by
-// price via a step expression. Fixed-size rather than stretched to fit
-// each price's text width (MapLibre's icon-text-fit can do that, but needs
-// a 9-slice image and careful anchor math to keep the tail undistorted --
-// not worth it when every domestic price is "$X.XX", a narrow, predictable
-// width).
+// A station renders as a price-tag pill (colored badge + tail) instead of a
+// plain dot -- tier picked per feature by a step expression on regular_price.
 const PRICE_TIERS: { id: string; color: string; max: number }[] = [
   { id: 'pill-1', color: '#4ade80', max: 3.25 },
   { id: 'pill-2', color: '#a3e635', max: 3.75 },
@@ -44,17 +33,14 @@ const PRICE_TIERS: { id: string; color: string; max: number }[] = [
 ]
 const PILL_FALLBACK_ID = 'pill-unknown'
 
-// All in CSS px (the canvas is drawn at 2x and registered with pixelRatio 2
-// for crisp text -- see makePillImage). Kept as constants because the text
-// vertical offset below has to line up with this exact geometry.
+// CSS px; canvas is drawn at 2x/pixelRatio 2 for crisp text (see
+// makePillImage). The text offset below depends on this exact geometry.
 const PILL_W = 48
 const PILL_H = 20
 const PILL_RADIUS = 10
 const TAIL_H = 6
 const PILL_TEXT_SIZE = 11
-// Distance from the image's bottom edge (the tail tip -- see icon-anchor
-// below) up to the pill's vertical center, converted to ems of
-// PILL_TEXT_SIZE the way MapLibre's text-offset expects.
+// Tail tip to pill center, in ems of PILL_TEXT_SIZE (as text-offset expects).
 const PILL_TEXT_OFFSET_EM = -(TAIL_H + PILL_H / 2) / PILL_TEXT_SIZE
 
 function makePillImage(fillColor: string): ImageData {
@@ -98,19 +84,8 @@ const PILL_COLOR_BY_ID = new Map<string, string>([
   [PILL_FALLBACK_ID, '#9ca3af'],
 ])
 
-/** Registers every pill tier image with this map instance -- images are
- * per-Map-instance state, so this has to re-run each time GasMap creates a
- * new one (see the effect below, which rebuilds the whole map rather than
- * patching an existing one).
- *
- * Deliberately a lazy resolver, not an eager `map.addImage()` loop run from
- * the map's 'load' event: that raced MapLibre's own first paint attempt in
- * production -- data-driven GeoJSON sources are available instantly (no
- * network fetch), so the symbol layer could try to render before 'load'
- * even finished, logging "Image ... could not be loaded" and leaving pills
- * as bare floating text with no fill. setMissingStyleImageResolver runs
- * synchronously exactly when a requested image is actually missing,
- * whenever that turns out to be -- no race to lose. */
+/** Lazy resolver, not an eager 'load'-time addImage loop -- that raced
+ * MapLibre's first paint in production, leaving pills as bare text. */
 function registerPillImages(map: MaplibreMap) {
   map.setMissingStyleImageResolver((id) => {
     const color = PILL_COLOR_BY_ID.get(id)
@@ -151,6 +126,8 @@ function buildStyle(flavorName: 'light' | 'dark', stations: StationSummary[], ti
   return {
     version: 8,
     glyphs: GLYPHS_URL,
+    // Basemap POI icons (town/capital dots, etc) -- without this, every
+    // place-label layer that references one logs a missing-image error.
     sprite: `https://protomaps.github.io/basemaps-assets/sprites/v4/${flavorName}`,
     sources: {
       [SOURCE_ID]: {
@@ -165,6 +142,12 @@ function buildStyle(flavorName: 'light' | 'dark', stations: StationSummary[], ti
         cluster: true,
         clusterRadius: 50,
         clusterMaxZoom: 9,
+        // Sums priced stations (and how many had a price) so circle-color
+        // below can average -- clusterProperties only accumulates, no average op.
+        clusterProperties: {
+          price_sum: ['+', ['case', ['==', ['get', 'regular_price'], null], 0, ['get', 'regular_price']]],
+          priced_count: ['+', ['case', ['==', ['get', 'regular_price'], null], 0, 1]],
+        },
       },
     },
     layers: [
@@ -175,18 +158,30 @@ function buildStyle(flavorName: 'light' | 'dark', stations: StationSummary[], ti
         source: STATIONS_SOURCE_ID,
         filter: ['has', 'point_count'],
         paint: {
+          // Same PRICE_TIERS palette as the pills, keyed off the cluster's
+          // average price (unpriced stations excluded); gray if none have one.
           'circle-color': [
-            'step',
-            ['get', 'point_count'],
-            '#7dd3fc',
-            10,
-            '#38bdf8',
-            25,
-            '#0ea5e9',
-            50,
-            '#6366f1',
-            100,
-            '#7c3aed',
+            'case',
+            ['==', ['get', 'priced_count'], 0],
+            PILL_COLOR_BY_ID.get(PILL_FALLBACK_ID)!,
+            [
+              'let',
+              'avg',
+              ['/', ['get', 'price_sum'], ['get', 'priced_count']],
+              [
+                'step',
+                ['var', 'avg'],
+                PRICE_TIERS[0]!.color,
+                PRICE_TIERS[0]!.max,
+                PRICE_TIERS[1]!.color,
+                PRICE_TIERS[1]!.max,
+                PRICE_TIERS[2]!.color,
+                PRICE_TIERS[2]!.max,
+                PRICE_TIERS[3]!.color,
+                PRICE_TIERS[3]!.max,
+                PRICE_TIERS[4]!.color,
+              ],
+            ],
           ],
           'circle-radius': ['step', ['get', 'point_count'], 14, 10, 18, 25, 22, 50, 26, 100, 32],
           'circle-opacity': 0.85,
@@ -204,7 +199,13 @@ function buildStyle(flavorName: 'light' | 'dark', stations: StationSummary[], ti
           'text-font': [LABEL_FONT],
           'text-size': 12,
         },
-        paint: { 'text-color': '#ffffff' },
+        // Same halo as the pill text below -- avg-price color now spans
+        // the same pale-to-saturated range plain white wasn't readable on.
+        paint: {
+          'text-color': '#ffffff',
+          'text-halo-color': '#00000099',
+          'text-halo-width': 1.2,
+        },
       },
       {
         id: 'unclustered-point',
@@ -212,9 +213,8 @@ function buildStyle(flavorName: 'light' | 'dark', stations: StationSummary[], ti
         source: STATIONS_SOURCE_ID,
         filter: ['!', ['has', 'point_count']],
         layout: {
-          // Fixed-size price-tag pill per PRICE_TIERS (registerPillImages
-          // pre-renders one image per tier) -- picks the tier by price,
-          // pill-unknown for a station with no live reading yet.
+          // Pre-rendered pill image per PRICE_TIERS, picked by price;
+          // pill-unknown when there's no live reading yet.
           'icon-image': [
             'case',
             ['==', ['get', 'regular_price'], null],
@@ -234,36 +234,28 @@ function buildStyle(flavorName: 'light' | 'dark', stations: StationSummary[], ti
             ],
           ],
           'icon-anchor': 'bottom',
-          // Deliberately no allow-overlap: MapLibre's default collision
-          // detection hides a pill (icon+text together, since both are in
-          // one symbol layer) when it would overlap an already-placed one
-          // -- forcing allow-overlap:true here overrode that and produced
-          // a wall of stacked, illegible pills in any dense metro area at
-          // the zoom where clusters first break apart. Letting collision
-          // detection do its job means denser areas just show fewer pills
-          // until you zoom in further, same as any map's place labels.
+          // No allow-overlap: keeps MapLibre's default collision detection
+          // so dense areas thin out instead of stacking illegible pills.
           'text-field': [
             'case',
             ['==', ['get', 'regular_price'], null],
             '--',
             ['concat', '$', ['number-format', ['get', 'regular_price'], { 'min-fraction-digits': 2, 'max-fraction-digits': 2 }]],
           ],
-          'text-font': [LABEL_FONT],
+          'text-font': [PILL_FONT],
           'text-size': PILL_TEXT_SIZE,
-          // 'center', not 'bottom': PILL_TEXT_OFFSET_EM already computes the
-          // distance from the tail tip up to the pill's vertical center, so
-          // anchoring by the text's own center lands it there directly.
-          // Anchoring by 'bottom' (tried first) put the text's *bottom*
-          // edge at that point instead, pushing most of the glyph above the
-          // pill's top edge -- confirmed in production, numbers floating
-          // above their pill instead of sitting inside it.
+          // 'center', not 'bottom': PILL_TEXT_OFFSET_EM already measures to
+          // the pill's center, so 'bottom' would push the glyph above it.
           'text-anchor': 'center',
           'text-offset': [0, PILL_TEXT_OFFSET_EM],
         },
-        // Dark text reads fine against every tier color (greens through
-        // red) -- simpler than a per-tier text color and no worse contrast
-        // than a plain white pill would need anyway.
-        paint: { 'text-color': '#111111' },
+        // Dark halo behind the white text -- plain white wasn't reliably
+        // readable against the paler tiers (lime/yellow) on its own.
+        paint: {
+          'text-color': '#ffffff',
+          'text-halo-color': '#00000099',
+          'text-halo-width': 1.2,
+        },
       },
     ],
   }
@@ -276,29 +268,25 @@ interface GasMapProps {
   tilesFile: string
   center: [number, number]
   zoom: number
-  /** Called with a station's id when its pill is clicked -- the caller
-   * (MapView) opens the in-panel station detail rather than this component
-   * knowing anything about routing/panels itself. */
+  /** Called with a station's id on pill click -- MapView owns what happens next. */
   onStationClick: (id: number) => void
 }
 
-/** Map of every station in the current region with a live price, clustered
- * by proximity. Basemap is a self-hosted Protomaps PMTiles extract (see
- * lib/tiles.ts) -- no third-party map API key or quota. */
+/** Every station in the region, clustered by proximity, on a self-hosted
+ * Protomaps basemap (see lib/tiles.ts) -- no third-party map API key. */
 export function GasMap({ stations, tilesFile, center, zoom, onStationClick }: GasMapProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const { theme } = useTheme()
 
-  // One effect, re-run in full on theme or station-data change: tears down
-  // and recreates the whole map rather than trying to patch an existing one
-  // via setStyle. Simpler, and sidesteps a real bug an earlier two-effect
-  // version had -- a "mount" effect plus a separate "update" effect guarded
-  // by a mountedRef both run in the same commit pass, so the guard didn't
-  // actually skip the update effect's first run; it fired a second,
-  // redundant setStyle() immediately after construction, while the pmtiles
-  // source's first header read was still in flight. Neither change happens
-  // often (a handful of times per session at most), so recreating outright
-  // costs nothing that matters.
+  // Read through a ref so a new onStationClick identity (e.g. setSearchParams)
+  // doesn't rebuild the map below and reset the user's pan/zoom.
+  const onStationClickRef = useRef(onStationClick)
+  useEffect(() => {
+    onStationClickRef.current = onStationClick
+  }, [onStationClick])
+
+  // Recreates the whole map rather than patching one via setStyle -- simpler,
+  // and this only fires on a real theme/data/tiles change.
   useEffect(() => {
     if (!containerRef.current) return
     ensureMaplibreSetup()
@@ -313,13 +301,11 @@ export function GasMap({ stations, tilesFile, center, zoom, onStationClick }: Ga
       attributionControl: { compact: true },
     })
     map.addControl(new NavigationControl({ showCompass: false }), 'top-right')
-    // Synchronously, not deferred to 'load' -- see registerPillImages' own
-    // comment for why that raced MapLibre's first paint in production.
+    // Synchronous, not on 'load' -- see registerPillImages for why deferring
+    // it raced MapLibre's first paint in production.
     registerPillImages(map)
-    // MapLibre doesn't throw or reject on a style/source/tile problem, it
-    // fires this event -- with nothing listening, that's silent failure. Cost
-    // real debugging time tracking down a production-only bug this way
-    // (see maplibreSetup.ts): the map just sat blank with an empty console.
+    // MapLibre fails silently on a style/source/tile problem -- log it
+    // instead of debugging another blank map with an empty console.
     map.on('error', (e) => console.error('MapLibre error:', e.error))
 
     map.on('click', 'clusters', async (e: MapLayerMouseEvent) => {
@@ -335,7 +321,7 @@ export function GasMap({ stations, tilesFile, center, zoom, onStationClick }: Ga
     map.on('click', 'unclustered-point', (e: MapLayerMouseEvent) => {
       const feature = e.features?.[0]
       const id = feature?.properties?.id
-      if (typeof id === 'number') onStationClick(id)
+      if (typeof id === 'number') onStationClickRef.current(id)
     })
 
     for (const layerId of ['clusters', 'unclustered-point']) {
@@ -348,12 +334,10 @@ export function GasMap({ stations, tilesFile, center, zoom, onStationClick }: Ga
     }
 
     return () => map.remove()
-    // center is a tuple from regions.ts's static REGIONS array, so it's a
-    // stable reference per region (not a fresh array each render) as long
-    // as the caller passes region.center straight through -- see MapView.tsx.
-    // onStationClick must likewise be stable (useCallback or a setState
-    // setter) or every render would tear down and rebuild the whole map.
-  }, [theme, stations, tilesFile, center, zoom, onStationClick])
+    // center/zoom are just the initial camera; a region change already
+    // remounts via `key={region.id}` in MapView.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [theme, stations, tilesFile])
 
   return <div ref={containerRef} className="h-full w-full" />
 }

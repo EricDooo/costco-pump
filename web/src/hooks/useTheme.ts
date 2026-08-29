@@ -19,14 +19,9 @@ function getStoredTheme(): Theme {
   return stored === 'light' || stored === 'dark' ? stored : 'system'
 }
 
-// Module-level store, not component state -- useTheme is called from more
-// than one component now (Header's toggle button, GasMap for basemap
-// flavor), and plain useState per call site meant each instance had its own
-// copy: toggling in Header updated Header's own state (and localStorage,
-// and the DOM attribute) but left GasMap's independent state -- and
-// therefore its basemap colors -- stale until a full remount. A shared
-// store with useSyncExternalStore keeps every call site in sync with a
-// single source of truth.
+// Module-level store, not component state -- called from both Header and
+// GasMap, and per-call-site useState left GasMap's basemap flavor stale
+// after a toggle elsewhere.
 let currentTheme = getStoredTheme()
 const listeners = new Set<() => void>()
 
@@ -54,19 +49,13 @@ function setStoredTheme(theme: Theme) {
   for (const listener of listeners) listener()
 }
 
-// Reflect the initial (possibly localStorage-restored) theme on <html> as
-// soon as this module loads, same as the old hook's mount-time effect --
-// but here it only needs to happen once, globally, not per component instance.
+// Reflect the initial theme on <html> once, at module load.
 if (typeof window !== 'undefined') {
   applyTheme(currentTheme)
 }
 
-/**
- * Tracks the user's explicit light/dark/system choice, persists it, and
- * reflects it as `data-theme` on <html>. The actual colors live in
- * theme.css as CSS variables -- this hook only ever flips one attribute.
- * Shared across every call site (see the module-level store above).
- */
+/** Tracks light/dark/system, persists it, and flips `data-theme` on <html>
+ * -- actual colors live in theme.css as CSS variables. */
 export function useTheme() {
   const theme = useSyncExternalStore(subscribe, getSnapshot)
 

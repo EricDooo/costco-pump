@@ -1,10 +1,7 @@
 import type { StationSummary } from './api'
 
-// Canadian province/territory codes -- the only thing that distinguishes a
-// Canadian row from a US one in warehouses.state (see scraper/client.py,
-// both come from the same warehouses.json call). UK rows have no state at
-// all (postcodes, not state codes -- checked in production: state is ''
-// for every UK warehouse).
+// The only thing that distinguishes a Canadian row from a US one in
+// warehouses.state; UK rows have no state at all (postcodes, not codes).
 export const CA_PROVINCES = new Set(['AB', 'BC', 'MB', 'NB', 'NL', 'NS', 'NT', 'NU', 'ON', 'PE', 'QC', 'SK', 'YT'])
 
 export type RegionId =
@@ -23,24 +20,17 @@ export type RegionId =
 export interface Region {
   id: RegionId
   label: string
-  /** Filename under /costcogas/tiles/ -- see scripts/update-tiles.sh
-   * (domestic) and scripts/update-international-tiles.sh (everyone else).
-   * us/ca/uk all share one extract since warehouses.json bundles all three
-   * into the same "domestic" bucket and the same geographic bbox. */
+  /** Filename under /costcogas/tiles/ -- us/ca/uk share one "domestic" extract. */
   tilesFile: string
   center: [number, number]
   zoom: number
-  /** Whether this region shows the "cheapest states" card -- only
-   * meaningful where stats/summary's per-state breakdown applies (US/CA
-   * share one warehouses table with real state/province codes; nothing
-   * else has an equivalent grouping). */
+  /** Only US/CA have real state/province codes to break down by. */
   showStateBreakdown: boolean
   matches: (station: StationSummary) => boolean
 }
 
-// warehouses.json's US/Canada/UK ids stay below this; scraper/international.py
-// hashes every other country into 900_000+ blocks (see that module's
-// docstring).
+// US/Canada/UK ids stay below this; every other country is hashed into
+// 900_000+ blocks (see scraper/international.py).
 const DOMESTIC_ID_CEILING = 900_000
 
 function isDomestic(s: StationSummary): boolean {

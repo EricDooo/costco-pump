@@ -48,10 +48,7 @@ export function MapView() {
   }
 
   // ?station=<id> is the source of truth for the open panel (shareable,
-  // survives a refresh) -- these two are stable across renders (setSearchParams
-  // itself is; wrapping it in useCallback keeps our own identity stable too),
-  // which matters because GasMap tears down and rebuilds its whole map
-  // instance whenever onStationClick's identity changes.
+  // survives a refresh).
   const selectedStationId = searchParams.get('station')
   const openStation = useCallback((id: number) => setSearchParams({ station: String(id) }), [setSearchParams])
   const closeStation = useCallback(() => setSearchParams({}), [setSearchParams])
@@ -61,17 +58,12 @@ export function MapView() {
     [stations, selectedStationId],
   )
 
-  // A shared station link might point at a warehouse outside whatever
-  // region happens to be selected (localStorage-remembered, or the default)
-  // -- once the full station list loads, jump to whichever region that
-  // station actually belongs to so the map behind the panel makes sense.
+  // A shared station link might point outside the currently selected region
+  // -- jump to whichever region it actually belongs to once stations load.
   useEffect(() => {
     if (!selectedStation) return
     const matchedRegion = REGIONS.find((r) => r.matches(selectedStation))
     if (matchedRegion && matchedRegion.id !== regionId) selectRegion(matchedRegion.id)
-    // Deliberately not depending on regionId -- this should only react to a
-    // *new* station selection (or the station list arriving), not re-fire
-    // every time the region changes for any other reason.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedStation])
 
@@ -88,26 +80,17 @@ export function MapView() {
     return { median: med, lowest, highest }
   }, [regionStations])
 
-  // stats/summary's state breakdown mixes US states and Canadian provinces
-  // together (they share one warehouses table) -- split by the same
-  // province-code check regions.ts uses, so "cheapest states" only shows
-  // entries that actually belong to the selected region.
+  // stats/summary mixes US states and Canadian provinces together -- split
+  // by the same province-code check regions.ts uses, then take the top 5.
   const stateBreakdown = useMemo(() => {
     if (!stats || !region.showStateBreakdown) return []
     const inRegion = regionId === 'ca' ? CA_PROVINCES.has.bind(CA_PROVINCES) : (s: string) => !CA_PROVINCES.has(s)
-    // stats/summary returns its top 20 across US+Canada combined (see
-    // app/routers/stats.py) precisely so filtering by country here still
-    // leaves enough to show a real top 5, instead of the top 5 *overall*
-    // silently losing entries to whichever country dominated it.
     return stats.cheapest_states.filter((s) => inRegion(s.state)).slice(0, 5)
   }, [stats, region, regionId])
 
   return (
-    // h-full: fills App.tsx's flex-1 slot (the remaining viewport height
-    // below Header) exactly. flex-col + min-h-0 on the row below is what
-    // lets the map actually claim "the rest of the space" instead of
-    // growing to fit its content and pushing the page into scrolling --
-    // the layout this whole page is now built around (see App.tsx).
+    // h-full fills App.tsx's flex-1 slot; flex-col + min-h-0 below is what
+    // lets the map claim the rest of the space instead of scrolling the page.
     <div className="flex h-full flex-col overflow-hidden">
       <div className="mx-auto flex w-full max-w-content flex-shrink-0 items-start justify-between gap-4 px-6 pt-6 pb-4">
         <div>
@@ -135,12 +118,10 @@ export function MapView() {
 
       {error && <p className="mx-auto max-w-content flex-shrink-0 px-6 text-sm text-negative">{error}</p>}
 
-      {/* Full-bleed below this point, unlike the rest of the site's
-          max-w-content pages -- a map wants the width. min-h-0 is load-
-          bearing on a flex child that needs to actually shrink to fit
-          (rather than overflow) instead of growing to its content size. */}
+      {/* Full-bleed below this point -- a map wants the width. */}
       <div className="flex min-h-0 flex-1 flex-col gap-4 px-4 pb-4 sm:px-6 lg:flex-row lg:items-stretch">
-        <aside className="max-h-[40vh] flex-shrink-0 space-y-6 overflow-y-auto lg:max-h-none lg:w-72 lg:overflow-y-auto">
+        {/* min-h-0: lets this scroll internally instead of growing the page. */}
+        <aside className="flex min-h-0 max-h-[40vh] flex-shrink-0 flex-col gap-6 overflow-y-auto lg:max-h-none lg:w-[26vw] lg:min-w-[340px] lg:max-w-[420px]">
           <Sidebar
             region={region}
             regionId={regionId}
