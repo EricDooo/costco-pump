@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -6,7 +6,7 @@ from ..cache import get_cached, set_cached
 from ..config import settings
 from ..db import get_session
 from ..limiter import limiter
-from ..schemas import MonthlyAverage, StateStat, StatsSummary
+from ..schemas import MonthlyAverage, StateChangeStat, StateStat, StatsSummary, TrendPoint, TrendSummary
 
 router = APIRouter()
 
@@ -66,6 +66,113 @@ _MONTHLY_AVG_SQL = text(
     """
 )
 
+# Domestic (id < 900000) only -- same reasoning as _STATE_AVG_TEMPLATE above.
+# `with_state` toggles an extra `w.state = :state` filter; the three queries
+# below are built fresh per call rather than kept as module-level constants
+# since that fragment varies.
+
+
+def _trend_points_sql(with_state: bool):
+    state_filter = "and w.state = :state" if with_state else ""
+    return text(
+        f"""
+        with daily_latest as (
+            -- One row per station per calendar day -- its last reading that
+            -- day, so multiple sweeps in a day don't skew the median.
+            select distinct on (warehouse_id, day)
+                warehouse_id, day, regular_price, premium_price, diesel_price
+            from (
+                select
+                    p.warehouse_id, date_trunc('day', p.time) as day, p.time,
+                    p.regular_price, p.premium_price, p.diesel_price
+                from price_readings p
+                join warehouses w on w.id = p.warehouse_id
+                where w.id < 900000 and p.time > now() - make_interval(days => :days) {state_filter}
+            ) sub
+            order by warehouse_id, day, time desc
+        )
+        select
+            to_char(day, 'YYYY-MM-DD') as date,
+            count(*) as stations_reporting,
+            percentile_cont(0.5) within group (order by regular_price) filter (where regular_price is not null) as median_regular,
+            percentile_cont(0.5) within group (order by premium_price) filter (where premium_price is not null) as median_premium,
+            percentile_cont(0.5) within group (order by diesel_price) filter (where diesel_price is not null) as median_diesel
+        from daily_latest
+        group by day
+        order by day
+        """
+    )
+
+
+def _current_median_sql(with_state: bool):
+    state_filter = "and w.state = :state" if with_state else ""
+    return text(
+        f"""
+        with latest as (
+            select distinct on (p.warehouse_id) p.warehouse_id, p.regular_price
+            from price_readings p
+            join warehouses w on w.id = p.warehouse_id
+            where w.id < 900000 and p.regular_price is not null {state_filter}
+            order by p.warehouse_id, p.time desc
+        )
+        select count(*) as stations_reporting,
+               percentile_cont(0.5) within group (order by regular_price) as current_median
+        from latest
+        """
+    )
+
+
+def _recent_moves_sql(with_state: bool):
+    state_filter = "and w.state = :state" if with_state else ""
+    return text(
+        f"""
+        with moves as (
+            select
+                p.regular_price,
+                lag(p.regular_price) over (partition by p.warehouse_id order by p.time) as prev_price,
+                p.time
+            from price_readings p
+            join warehouses w on w.id = p.warehouse_id
+            where w.id < 900000 {state_filter}
+        )
+        select
+            count(*) filter (where regular_price < prev_price) as cuts,
+            count(*) filter (where regular_price > prev_price) as hikes
+        from moves
+        where prev_price is not null and regular_price is not null and time > now() - interval '1 day'
+        """
+    )
+
+
+_CHANGES_BY_STATE_SQL = text(
+    """
+    with moves as (
+        select
+            w.state, p.regular_price,
+            lag(p.regular_price) over (partition by p.warehouse_id order by p.time) as prev_price,
+            p.time
+        from price_readings p
+        join warehouses w on w.id = p.warehouse_id
+        where w.id < 900000 and w.state != ''
+    ),
+    deltas as (
+        select state, regular_price - prev_price as delta
+        from moves
+        where prev_price is not null and regular_price is not null and regular_price != prev_price
+          and time > now() - make_interval(hours => :hours)
+    )
+    select
+        state,
+        count(*) filter (where delta > 0) as hikes,
+        count(*) filter (where delta < 0) as cuts,
+        avg(delta) as avg_change,
+        max(abs(delta)) as biggest_move
+    from deltas
+    group by state
+    order by count(*) desc
+    """
+)
+
 
 @router.get("/stats/summary", response_model=StatsSummary)
 @limiter.limit("30/minute")
@@ -92,4 +199,78 @@ async def stats_summary(request: Request, session: AsyncSession = Depends(get_se
         ],
     )
     await set_cached("stats:summary", result.model_dump(), settings.stats_cache_seconds)
+    return result
+
+
+@router.get("/stats/trend", response_model=TrendSummary)
+@limiter.limit("30/minute")
+async def stats_trend(
+    request: Request,
+    days: int = Query(default=30, ge=1, le=365),
+    state: str | None = Query(default=None, max_length=2),
+    session: AsyncSession = Depends(get_session),
+) -> TrendSummary:
+    state_code = state.upper() if state else None
+    cache_key = f"stats:trend:{days}:{state_code or 'all'}"
+    if cached := await get_cached(cache_key):
+        return TrendSummary(**cached)
+
+    state_params = {"state": state_code} if state_code else {}
+    points_rows = (
+        (await session.execute(_trend_points_sql(bool(state_code)), {"days": days, **state_params})).mappings().all()
+    )
+    median_row = (await session.execute(_current_median_sql(bool(state_code)), state_params)).mappings().one()
+    moves_row = (await session.execute(_recent_moves_sql(bool(state_code)), state_params)).mappings().one()
+
+    points = [
+        TrendPoint(
+            date=r["date"],
+            median_regular=float(r["median_regular"]) if r["median_regular"] is not None else None,
+            median_premium=float(r["median_premium"]) if r["median_premium"] is not None else None,
+            median_diesel=float(r["median_diesel"]) if r["median_diesel"] is not None else None,
+            stations_reporting=r["stations_reporting"],
+        )
+        for r in points_rows
+    ]
+    # move: first vs last *reported* median in the window, not necessarily
+    # the very first/last day -- a window's edge days can have zero reports.
+    first_regular = next((p.median_regular for p in points if p.median_regular is not None), None)
+    last_regular = next((p.median_regular for p in reversed(points) if p.median_regular is not None), None)
+    move = last_regular - first_regular if first_regular is not None and last_regular is not None else None
+
+    result = TrendSummary(
+        points=points,
+        current_median=float(median_row["current_median"]) if median_row["current_median"] is not None else None,
+        stations_reporting=median_row["stations_reporting"] or 0,
+        move=move,
+        latest_day_hikes=moves_row["hikes"] or 0,
+        latest_day_cuts=moves_row["cuts"] or 0,
+    )
+    await set_cached(cache_key, result.model_dump(), settings.stats_cache_seconds)
+    return result
+
+
+@router.get("/stats/changes-by-state", response_model=list[StateChangeStat])
+@limiter.limit("30/minute")
+async def stats_changes_by_state(
+    request: Request,
+    hours: int = Query(default=24, ge=1, le=720),
+    session: AsyncSession = Depends(get_session),
+) -> list[StateChangeStat]:
+    cache_key = f"stats:changes-by-state:{hours}"
+    if cached := await get_cached(cache_key):
+        return [StateChangeStat(**row) for row in cached]
+
+    rows = (await session.execute(_CHANGES_BY_STATE_SQL, {"hours": hours})).mappings().all()
+    result = [
+        StateChangeStat(
+            state=r["state"],
+            hikes=r["hikes"] or 0,
+            cuts=r["cuts"] or 0,
+            avg_change=float(r["avg_change"]) if r["avg_change"] is not None else 0.0,
+            biggest_move=float(r["biggest_move"]) if r["biggest_move"] is not None else 0.0,
+        )
+        for r in rows
+    ]
+    await set_cached(cache_key, [r.model_dump() for r in result], settings.stats_cache_seconds)
     return result

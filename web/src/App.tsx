@@ -4,6 +4,7 @@ import { Footer } from './layout/Footer'
 import { Header } from './layout/Header'
 import { About } from './pages/About'
 import { Analytics } from './pages/Analytics'
+import { AnalyticsState } from './pages/AnalyticsState'
 import { Dashboard } from './pages/Dashboard'
 import { StationDetail } from './pages/StationDetail'
 
@@ -30,6 +31,7 @@ function App() {
             }
           />
           <Route path="/analytics" element={<Analytics />} />
+          <Route path="/analytics/state/:code" element={<AnalyticsState />} />
           <Route path="/stations" element={<Dashboard />} />
           <Route path="/stations/:id" element={<StationDetail />} />
           <Route path="/about" element={<About />} />

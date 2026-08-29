@@ -61,3 +61,30 @@ class StatsSummary(BaseModel):
     cheapest_states: list[StateStat]
     priciest_states: list[StateStat]
     monthly_averages: list[MonthlyAverage]
+
+
+class TrendPoint(BaseModel):
+    date: str
+    median_regular: float | None
+    median_premium: float | None
+    median_diesel: float | None
+    stations_reporting: int
+
+
+class TrendSummary(BaseModel):
+    points: list[TrendPoint]
+    current_median: float | None
+    stations_reporting: int
+    # Dollars, current minus the value `days` ago -- null until the window
+    # has two real endpoints to compare.
+    move: float | None
+    latest_day_hikes: int
+    latest_day_cuts: int
+
+
+class StateChangeStat(BaseModel):
+    state: str
+    hikes: int
+    cuts: int
+    avg_change: float
+    biggest_move: float
