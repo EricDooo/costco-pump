@@ -251,7 +251,14 @@ function buildStyle(flavorName: 'light' | 'dark', stations: StationSummary[], ti
           ],
           'text-font': [LABEL_FONT],
           'text-size': PILL_TEXT_SIZE,
-          'text-anchor': 'bottom',
+          // 'center', not 'bottom': PILL_TEXT_OFFSET_EM already computes the
+          // distance from the tail tip up to the pill's vertical center, so
+          // anchoring by the text's own center lands it there directly.
+          // Anchoring by 'bottom' (tried first) put the text's *bottom*
+          // edge at that point instead, pushing most of the glyph above the
+          // pill's top edge -- confirmed in production, numbers floating
+          // above their pill instead of sitting inside it.
+          'text-anchor': 'center',
           'text-offset': [0, PILL_TEXT_OFFSET_EM],
         },
         // Dark text reads fine against every tier color (greens through
