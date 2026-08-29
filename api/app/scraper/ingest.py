@@ -136,23 +136,28 @@ async def upsert_warehouse_and_reading(session: AsyncSession, row: dict, batch_t
     await session.execute(reading_stmt)
 
 
-async def get_all_warehouse_ids(session: AsyncSession) -> list[int]:
-    """Every warehouse ID already known to us -- the source enqueuer.py's
-    hourly price sweep reads from, instead of rediscovering IDs via the grid
-    every time (see client.fetch_prices). New/closed warehouses only show up
-    here after the next metadata sweep picks them up."""
-    result = await session.execute(select(Warehouse.id))
-    return [row[0] for row in result.all()]
+async def filter_known_warehouse_ids(session: AsyncSession, ids: list[int]) -> set[int]:
+    """Which of `ids` already have a `warehouses` row -- the price sweep's
+    IDs come from Costco's own site (client.fetch_all_warehouse_ids), not
+    this table, so a batch can include IDs the metadata sweep hasn't
+    created a row for yet. Filtering here rather than letting the FK
+    reject them matters: one failed INSERT aborts the whole transaction in
+    Postgres, which would silently lose every other valid reading in the
+    same batch, not just the unknown one.
+    """
+    if not ids:
+        return set()
+    result = await session.execute(select(Warehouse.id).where(Warehouse.id.in_(ids)))
+    return {row[0] for row in result.all()}
 
 
 async def upsert_price_reading(session: AsyncSession, warehouse_id: int, price: dict, batch_time: dt.datetime) -> bool:
-    """Record one price reading for an already-known warehouse -- the
-    price-only sweep path (scraper/jobs.py's refresh_price_batch). No
-    location/address touched here, unlike upsert_warehouse_and_reading:
-    the warehouse row already exists (its ID came from get_all_warehouse_ids
-    above), and the FK on price_readings.warehouse_id means this simply
-    fails loudly if it somehow doesn't, rather than silently orphaning a
-    reading.
+    """Record one price reading -- the price-only sweep path
+    (scraper/jobs.py's refresh_price_batch). Caller is expected to have
+    already filtered `warehouse_id` through filter_known_warehouse_ids
+    above; this doesn't re-check, so an unknown ID still fails via the FK
+    rather than silently orphaning a reading. No location/address touched
+    here, unlike upsert_warehouse_and_reading.
     """
     regular = _price(price, "regular")
     premium = _price(price, "premium")

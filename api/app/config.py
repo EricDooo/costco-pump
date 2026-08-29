@@ -8,10 +8,19 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     # How often the enqueuer schedules a fresh price sweep, in seconds --
-    # reads warehouse IDs straight from our own `warehouses` table (see
-    # enqueuer.py) rather than rediscovering them via the grid every time,
-    # so this can run often without hammering the locator endpoint at all.
+    # reads warehouse IDs from Costco's own site (see
+    # scraper/client.py's fetch_all_warehouse_ids, cached per
+    # warehouse_ids_cache_seconds below) rather than rediscovering them via
+    # the grid every time, so this can run often without hammering the
+    # locator endpoint at all.
     sweep_interval_seconds: int = 60 * 60
+
+    # How long the warehouse ID list (fetch_all_warehouse_ids) is cached
+    # for before the price sweep re-fetches it. Warehouse counts change
+    # rarely; a day between refetches is already generous, not a
+    # correctness concern -- a brand new warehouse just doesn't get price
+    # readings until the next refetch.
+    warehouse_ids_cache_seconds: int = 60 * 60 * 24
 
     # How often the enqueuer runs a full grid-based metadata sweep -- the
     # one that discovers new/closed warehouses and refreshes address/hours

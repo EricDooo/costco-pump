@@ -15,6 +15,12 @@ site's own JS bundle (the same way a browser's dev tools would show it):
   - www.costco.com/AjaxGetGasPricesService -- live prices, batched by
     warehouse ID (`_`-joined, same delimiter Costco's own frontend uses).
 
+A third source, not an API call at all: www.costco.com/w/-/locations's own
+page bundle embeds a static manifest of every warehouse ID Costco has (see
+ID_MANIFEST_PATH below). That's the price sweep's ID source now, cached
+rather than re-derived from the grid every time -- see
+fetch_all_warehouse_ids.
+
 Neither sits behind Akamai's bot-management gate the old endpoint did --
 confirmed no WAF block, no JS-sensor challenge, both fully public and
 unauthenticated. What they DO have: a plain `httpx` request to either one
@@ -33,6 +39,7 @@ ingest.py, which didn't need to change at all for this swap.
 
 import asyncio
 import logging
+import re
 from typing import Any
 
 from curl_cffi.const import CurlIpResolve, CurlOpt
@@ -54,6 +61,21 @@ PRICES_BASE_URL = "https://www.costco.com"
 PRICES_PATH = "/AjaxGetGasPricesService"
 # Matches the batch size Costco's own locator page uses for one price call.
 PRICE_BATCH_SIZE = 50
+
+# The full warehouse-locations page -- any query string, any path under
+# /w/-/locations, returns the identical Next.js bundle (confirmed: same
+# byte count, same content, regardless of location) -- so this is fetched
+# with no query at all. Buried in it is a static manifest of every
+# warehouse Costco has, as `<id>-wh` slugs (a routing/typeahead list, not
+# per-warehouse data -- no address or coordinates, just IDs). That's the
+# authoritative ID source now (see get_warehouse_ids in enqueuer.py's
+# caller), replacing the grid as how the price sweep knows what to ask
+# AjaxGetGasPricesService for. The grid still exists (fetch_grid_point/
+# sweep below) because address/lat-lon/hours only come from
+# salesLocations.json, which takes lat/lng, not an ID -- confirmed by
+# testing salesLocationId as a query param directly (400 Bad Request).
+ID_MANIFEST_PATH = "/w/-/locations"
+ID_MANIFEST_PATTERN = re.compile(r"(\d{1,6})-wh")
 
 HEADERS = {
     "Accept": "application/json",
@@ -157,14 +179,31 @@ def _normalize(location: dict, prices: dict[str, dict]) -> dict:
     }
 
 
+async def fetch_all_warehouse_ids() -> list[int]:
+    """Every warehouse ID Costco's own site knows about -- see
+    ID_MANIFEST_PATH's comment above for where this comes from. Cached by
+    the caller (enqueuer.py, via app.cache) rather than re-fetched every
+    sweep; warehouse counts change rarely enough that a fresh page load
+    each time would be wasted work, not freshness."""
+    async with AsyncSession(
+        base_url=PRICES_BASE_URL, impersonate=IMPERSONATE, curl_options=CURL_OPTIONS, timeout=settings.scrape_timeout_seconds
+    ) as client:
+        try:
+            resp = await client.get(ID_MANIFEST_PATH, headers=HEADERS)
+            resp.raise_for_status()
+        except RequestException as exc:
+            logger.warning("Failed to fetch the warehouse ID manifest: %s", exc)
+            return []
+    ids = {int(m) for m in ID_MANIFEST_PATTERN.findall(resp.text)}
+    return sorted(ids)
+
+
 async def fetch_prices(ids: list[str]) -> dict[str, dict]:
     """Live prices for a batch of already-known warehouse IDs (at most
     PRICE_BATCH_SIZE -- enqueuer.py splits the full ID list into batches
     this size, one job per batch). This is the fast, frequent hourly path:
-    no locator call at all, since the IDs come straight from our own
-    `warehouses` table (see ingest.get_all_warehouse_ids) instead of being
-    rediscovered via the grid every time -- that's what fetch_grid_point/
-    sweep below are for, run far less often."""
+    no locator call at all -- see fetch_all_warehouse_ids for where the IDs
+    come from instead."""
     async with AsyncSession(
         base_url=PRICES_BASE_URL, impersonate=IMPERSONATE, curl_options=CURL_OPTIONS, timeout=settings.scrape_timeout_seconds
     ) as client:

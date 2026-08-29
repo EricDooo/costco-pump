@@ -2,17 +2,22 @@
 
 Two independent schedules, run concurrently:
   - price sweep (hourly, `sweep_interval_seconds`): prices only, for every
-    warehouse ID already known -- read straight from our own `warehouses`
-    table (ingest.get_all_warehouse_ids), not rediscovered via the grid
-    every time. Costco's locator caps results at 50/page, which is why the
-    grid-sweep approach existed at all; the price endpoint takes a batch of
-    IDs directly, so once IDs are known there's no reason to keep
-    re-deriving them hourly. ~674 warehouses / 50 per batch is ~14 jobs,
+    warehouse ID Costco's own site lists (scraper/client.py's
+    fetch_all_warehouse_ids -- a static manifest baked into their
+    warehouse-locator page, cached here per warehouse_ids_cache_seconds
+    rather than our own `warehouses` table). Costco's locator caps results
+    at 50/page, which is why the grid-sweep approach existed at all; the
+    price endpoint takes a batch of IDs directly, and this ID source
+    doesn't depend on a grid sweep ever having run -- it works from a
+    completely empty database. ~616 warehouses / 50 per batch is ~13 jobs,
     down from ~184 grid-point jobs -- most of which used to exist only to
     re-discover IDs we'd already seen.
   - metadata sweep (daily, `metadata_sweep_interval_seconds`): the original
     full grid sweep, discovering new/closed warehouses and refreshing
-    address/hours. Warehouses don't change that often; daily is generous.
+    address/hours. Still grid-based -- salesLocations.json only takes
+    lat/lng, confirmed there's no per-ID equivalent (salesLocationId as a
+    query param is a 400) -- but it no longer gates the price sweep's ID
+    list the way it used to.
 
 Both trickle their enqueue() calls across most of their interval rather
 than dumping everything in at once -- see SPREAD_FRACTION. That matters
@@ -25,12 +30,6 @@ couple of minutes" -- confirmed in production as jobs that silently hung
 with no response at all, the same silent-drop symptom seen everywhere else
 in this project when request volume spikes.
 
-On a genuinely empty database (never swept before) the price sweep has
-nothing to read and skips until the metadata sweep -- itself trickled
-across up to `metadata_sweep_interval_seconds` -- has covered enough of the
-country to seed it. Not a concern for this project's actual database, which
-already has warehouses in it, but worth knowing for a from-scratch setup.
-
 This process only enqueues; `worker.py` is what actually does the work.
 Separating them is the point of using a queue at all -- a slow or failed
 job never blocks the schedule, and scraping throughput can be scaled by
@@ -41,13 +40,16 @@ import asyncio
 import datetime as dt
 import logging
 
+from app.cache import get_cached, set_cached
 from app.config import settings
-from app.db import SessionLocal, init_models
+from app.db import init_models
 from app.queue import sweep_queue
+from app.scraper.client import fetch_all_warehouse_ids
 from app.scraper.grid import grid_points
-from app.scraper.ingest import get_all_warehouse_ids
 
 logger = logging.getLogger(__name__)
+
+WAREHOUSE_IDS_CACHE_KEY = "warehouse_ids"
 
 # Fraction of the interval spent trickling jobs in -- not the full interval,
 # so a round that starts slightly late (or a slow job along the way) still
@@ -70,14 +72,26 @@ async def _enqueue_paced(job_name: str, jobs_args: list[tuple], batch_time: str,
             await asyncio.sleep(spacing)
 
 
+async def get_warehouse_ids() -> list[int]:
+    """The cached warehouse ID list, refetching from Costco's site
+    (client.fetch_all_warehouse_ids) only once every
+    warehouse_ids_cache_seconds."""
+    cached = await get_cached(WAREHOUSE_IDS_CACHE_KEY)
+    if cached is not None:
+        return cached
+    ids = await fetch_all_warehouse_ids()
+    if ids:
+        await set_cached(WAREHOUSE_IDS_CACHE_KEY, ids, settings.warehouse_ids_cache_seconds)
+    return ids
+
+
 async def enqueue_price_sweep() -> None:
     # One shared timestamp for the whole round -- see upsert_warehouse_and_reading
     # for why that matters for retries.
     batch_time = dt.datetime.now(dt.timezone.utc).isoformat()
-    async with SessionLocal() as session:
-        ids = await get_all_warehouse_ids(session)
+    ids = await get_warehouse_ids()
     if not ids:
-        logger.warning("No warehouses known yet -- skipping price sweep until a metadata sweep seeds some")
+        logger.warning("Couldn't fetch the warehouse ID list -- skipping this price sweep round")
         return
 
     batches = [ids[i : i + PRICE_BATCH_SIZE] for i in range(0, len(ids), PRICE_BATCH_SIZE)]
