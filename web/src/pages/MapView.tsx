@@ -5,7 +5,7 @@ import { Sidebar } from '../components/Sidebar'
 import { useRecentStations } from '../hooks/useRecentStations'
 import { useRegion } from '../hooks/useRegion'
 import { api, type StationSummary, type StatsSummary, type TrendSummary } from '../lib/api'
-import { CA_PROVINCES, REGIONS } from '../lib/regions'
+import { REGIONS } from '../lib/regions'
 
 function median(values: number[]): number | null {
   if (values.length === 0) return null
@@ -24,13 +24,23 @@ export function MapView() {
   const [searchParams, setSearchParams] = useSearchParams()
 
   useEffect(() => {
-    Promise.all([api.stations(), api.statsSummary()])
-      .then(([s, summary]) => {
-        setStations(s)
-        setStats(summary)
-      })
+    api
+      .stations()
+      .then(setStations)
       .catch(() => setError('Could not load live data right now.'))
   }, [])
+
+  // Region-scoped now that /stats/summary itself is (see stats.py) -- was
+  // fetched once, unscoped, then client-filtered by CA_PROVINCES below;
+  // refetching per region instead means the backend does that split, the
+  // same way trend/changesByState already do.
+  useEffect(() => {
+    setStats(null)
+    api
+      .statsSummary(regionId)
+      .then(setStats)
+      .catch(() => {})
+  }, [regionId])
 
   // A compact trend line for the sidebar card -- 14 days is plenty for
   // that small a chart; the full 30-day version lives on Analytics.
@@ -81,13 +91,16 @@ export function MapView() {
     return { median: med, lowest, highest }
   }, [regionStations])
 
-  // stats/summary mixes US states and Canadian provinces together -- split
-  // by the same province-code check regions.ts uses, then take the top 5.
+  // /stats/summary is already region-scoped (see the effect above) -- just
+  // trim to the sidebar's top-5.
   const stateBreakdown = useMemo(() => {
     if (!stats || !region.showStateBreakdown) return []
-    const inRegion = regionId === 'ca' ? CA_PROVINCES.has.bind(CA_PROVINCES) : (s: string) => !CA_PROVINCES.has(s)
-    return stats.cheapest_states.filter((s) => inRegion(s.state)).slice(0, 5)
-  }, [stats, region, regionId])
+    return stats.cheapest_states.slice(0, 5)
+  }, [stats, region])
+  const priciestBreakdown = useMemo(() => {
+    if (!stats || !region.showStateBreakdown) return []
+    return stats.priciest_states.slice(0, 5)
+  }, [stats, region])
 
   // Resolved against the full (not region-filtered) list -- a recent
   // station can be from a different region than the one currently shown.
@@ -111,6 +124,7 @@ export function MapView() {
             regionId={regionId}
             summary={summary}
             stateBreakdown={stateBreakdown}
+            priciestBreakdown={priciestBreakdown}
             regionStations={regionStations}
             trend={trend}
             recentStations={recentStations}

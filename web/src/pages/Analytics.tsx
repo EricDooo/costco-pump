@@ -1,10 +1,18 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { AllStatesTable } from '../components/AllStatesTable'
+import { RegionalBenchmarks } from '../components/RegionalBenchmarks'
 import { StatsHeader } from '../components/StatsHeader'
 import { useRegion } from '../hooks/useRegion'
-import { api, type StateChangeStat, type StateFuelStat, type StatsSummary, type TrendSummary } from '../lib/api'
+import {
+  api,
+  type BenchmarkSummary,
+  type StateChangeStat,
+  type StateFuelStat,
+  type StatsSummary,
+  type TrendSummary,
+} from '../lib/api'
 import { stateName } from '../lib/stateNames'
 
 const TREND_DAYS = 30
@@ -48,48 +56,112 @@ function ActivityBar({ hikes, cuts }: { hikes: number; cuts: number }) {
   )
 }
 
+type ChangeSortKey = 'state' | 'cuts' | 'hikes' | 'avg_change' | 'biggest_move'
+
+const CHANGE_COLUMNS: { key: ChangeSortKey; label: string; align?: 'right' }[] = [
+  { key: 'state', label: 'State' },
+  { key: 'cuts', label: 'Cuts', align: 'right' },
+  { key: 'hikes', label: 'Hikes', align: 'right' },
+  { key: 'avg_change', label: 'Avg change', align: 'right' },
+  { key: 'biggest_move', label: 'Biggest move', align: 'right' },
+]
+
+function SortIcon({ direction }: { direction: 'asc' | 'desc' | null }) {
+  if (!direction) return null
+  return <span className="ml-1 inline-block">{direction === 'asc' ? '▲' : '▼'}</span>
+}
+
+/** Same sortable/scrollable/filterable treatment as AllStatesTable -- this
+ * list is unbounded (every state with a move in the window), so it needs
+ * the same internal scroll rather than growing the page. */
 function ChangesByStateTable({ rows }: { rows: StateChangeStat[] }) {
-  if (rows.length === 0) {
-    return (
-      <div className="rounded-lg border border-border bg-surface p-4">
-        <div className="text-xs font-medium text-muted">Price changes by state (last 24h)</div>
-        <p className="mt-3 text-sm text-muted">No price moves recorded in this window yet.</p>
-      </div>
-    )
+  const [query, setQuery] = useState('')
+  const [sortKey, setSortKey] = useState<ChangeSortKey>('cuts')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return rows
+    return rows.filter((r) => `${r.state} ${stateName(r.state)}`.toLowerCase().includes(q))
+  }, [rows, query])
+
+  const sorted = useMemo(() => {
+    const dir = sortDir === 'asc' ? 1 : -1
+    return [...filtered].sort((a, b) => {
+      const av = a[sortKey]
+      const bv = b[sortKey]
+      if (typeof av === 'string' || typeof bv === 'string') return String(av).localeCompare(String(bv)) * dir
+      return (av - bv) * dir
+    })
+  }, [filtered, sortKey, sortDir])
+
+  function toggleSort(key: ChangeSortKey) {
+    if (key === sortKey) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortKey(key)
+      setSortDir('desc')
+    }
   }
+
   return (
-    <div className="rounded-lg border border-border bg-surface p-4">
-      <div className="text-xs font-medium text-muted">Price changes by state (last 24h)</div>
-      <div className="mt-3 overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-xs text-muted">
-              <th className="pb-2 font-medium">State</th>
-              <th className="pb-2 text-right font-medium">Cuts</th>
-              <th className="pb-2 text-right font-medium">Hikes</th>
-              <th className="pb-2 text-right font-medium">Avg change</th>
-              <th className="pb-2 text-right font-medium">Biggest move</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.state} className="border-t border-border">
-                <td className="py-1.5">
-                  <Link to={`/analytics/state/${r.state}`} className="text-foreground hover:text-primary hover:underline">
-                    {stateName(r.state)}
-                  </Link>
-                </td>
-                <td className="py-1.5 text-right font-mono text-positive">{r.cuts}</td>
-                <td className="py-1.5 text-right font-mono text-negative">{r.hikes}</td>
-                <td className={`py-1.5 text-right font-mono ${r.avg_change >= 0 ? 'text-negative' : 'text-positive'}`}>
-                  {formatCents(r.avg_change)}
-                </td>
-                <td className="py-1.5 text-right font-mono text-muted">{formatCents(r.biggest_move)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+    <div className="rounded-lg border border-border bg-surface">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
+        <div className="text-xs font-medium text-muted">Price changes by state (last 24h)</div>
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Filter states..."
+          className="w-full max-w-xs rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-primary"
+        />
       </div>
+
+      {sorted.length === 0 ? (
+        <p className="p-4 text-sm text-muted">
+          {rows.length === 0 ? 'No price moves recorded in this window yet.' : 'No states match that filter.'}
+        </p>
+      ) : (
+        <div className="scrollbar-thin max-h-[28rem] overflow-y-auto">
+          <table className="w-full text-sm">
+            <thead className="sticky top-0 bg-surface">
+              <tr className="text-left text-xs text-muted">
+                {CHANGE_COLUMNS.map((col) => (
+                  <th key={col.key} className={col.align === 'right' ? 'text-right' : ''}>
+                    <button
+                      type="button"
+                      onClick={() => toggleSort(col.key)}
+                      className={`w-full px-4 py-2 font-medium uppercase tracking-wide hover:text-foreground ${
+                        col.align === 'right' ? 'text-right' : 'text-left'
+                      } ${sortKey === col.key ? 'text-foreground' : ''}`}
+                    >
+                      {col.label}
+                      <SortIcon direction={sortKey === col.key ? sortDir : null} />
+                    </button>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((r) => (
+                <tr key={r.state} className="border-t border-border hover:bg-background/50">
+                  <td className="px-4 py-2">
+                    <Link to={`/analytics/state/${r.state}`} className="font-medium text-foreground hover:text-primary hover:underline">
+                      {stateName(r.state)}
+                    </Link>
+                  </td>
+                  <td className="px-4 py-2 text-right font-mono text-positive">{r.cuts}</td>
+                  <td className="px-4 py-2 text-right font-mono text-negative">{r.hikes}</td>
+                  <td className={`px-4 py-2 text-right font-mono ${r.avg_change >= 0 ? 'text-negative' : 'text-positive'}`}>
+                    {formatCents(r.avg_change)}
+                  </td>
+                  <td className="px-4 py-2 text-right font-mono text-muted">{formatCents(r.biggest_move)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }
@@ -172,25 +244,31 @@ export function Analytics() {
   const [trend, setTrend] = useState<TrendSummary | null>(null)
   const [changesByState, setChangesByState] = useState<StateChangeStat[] | null>(null)
   const [allStates, setAllStates] = useState<StateFuelStat[] | null>(null)
+  const [benchmarks, setBenchmarks] = useState<BenchmarkSummary | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     setTrend(null)
     setChangesByState(null)
     setAllStates(null)
+    setBenchmarks(null)
     setError(null)
     const calls = [
-      api.statsSummary(),
+      api.statsSummary(regionId),
       api.trend({ days: TREND_DAYS, region: regionId }),
       region.showStateBreakdown ? api.changesByState({ region: regionId }) : Promise.resolve([]),
       region.showStateBreakdown ? api.states(regionId) : Promise.resolve([]),
+      // EIA's PADD geography only covers US states -- nothing to compare
+      // Canada/UK/international against, see api's /stats/benchmarks.
+      regionId === 'us' ? api.benchmarks() : Promise.resolve(null),
     ] as const
     Promise.all(calls)
-      .then(([s, t, c, a]) => {
+      .then(([s, t, c, a, b]) => {
         setStats(s)
         setTrend(t)
         setChangesByState(c)
         setAllStates(a)
+        setBenchmarks(b)
       })
       .catch(() => setError('Could not load live data right now.'))
   }, [regionId, region.showStateBreakdown])
@@ -249,6 +327,13 @@ export function Analytics() {
               <div className="mt-8">{changesByState && <ChangesByStateTable rows={changesByState} />}</div>
               <div className="mt-8">{allStates && <AllStatesTable rows={allStates} />}</div>
             </>
+          )}
+
+          {regionId === 'us' && (
+            <div className="mt-8">
+              <div className="mb-3 text-sm font-bold text-foreground">Costco vs. regional gas prices</div>
+              <RegionalBenchmarks data={benchmarks} />
+            </div>
           )}
         </>
       )}

@@ -15,11 +15,51 @@ interface RegionSummary {
 
 /** Map page's left panel -- national summary or a selected station,
  * switched in place (no route change, no loading flash). */
+function StateFuelList({ title, rows, regionId }: { title: string; rows: StateStat[]; regionId: RegionId }) {
+  return (
+    <div className="rounded-lg border border-border bg-surface p-4">
+      <div className="text-xs font-medium text-muted">
+        {title} {regionId === 'ca' ? 'provinces' : 'states'} (7-day avg)
+      </div>
+      <div className="mt-3 overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-left text-muted">
+              <th className="pb-1.5 font-medium"></th>
+              <th className="pb-1.5 text-right font-medium">Reg</th>
+              <th className="pb-1.5 text-right font-medium">Prem</th>
+              <th className="pb-1.5 text-right font-medium">Diesel</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((s, i) => (
+              <tr key={s.state}>
+                <td className="py-1 text-foreground">
+                  <span className="mr-1.5 text-muted">{i + 1}</span>
+                  {s.state}
+                </td>
+                <td className="py-1 text-right font-mono text-blue-600">${s.avg_regular_price.toFixed(2)}</td>
+                <td className="py-1 text-right font-mono text-red-600">
+                  {s.avg_premium_price === null ? <span className="text-muted">--</span> : `$${s.avg_premium_price.toFixed(2)}`}
+                </td>
+                <td className="py-1 text-right font-mono text-green-600">
+                  {s.avg_diesel_price === null ? <span className="text-muted">--</span> : `$${s.avg_diesel_price.toFixed(2)}`}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 export function Sidebar({
   region,
   regionId,
   summary,
   stateBreakdown,
+  priciestBreakdown,
   regionStations,
   trend,
   recentStations,
@@ -31,6 +71,7 @@ export function Sidebar({
   regionId: RegionId
   summary: RegionSummary | null
   stateBreakdown: StateStat[]
+  priciestBreakdown: StateStat[]
   regionStations: StationSummary[]
   trend: TrendSummary | null
   recentStations: StationSummary[]
@@ -71,24 +112,8 @@ export function Sidebar({
         )}
       </div>
 
-      {stateBreakdown.length > 0 && (
-        <div className="rounded-lg border border-border bg-surface p-4">
-          <div className="text-xs font-medium text-muted">
-            Cheapest {regionId === 'ca' ? 'provinces' : 'states'} (7-day avg)
-          </div>
-          <ol className="mt-3 space-y-2">
-            {stateBreakdown.map((s, i) => (
-              <li key={s.state} className="flex items-center justify-between text-sm">
-                <span className="text-foreground">
-                  <span className="mr-2 text-muted">{i + 1}</span>
-                  {s.state}
-                </span>
-                <span className="font-mono text-muted">${s.avg_regular_price.toFixed(2)}</span>
-              </li>
-            ))}
-          </ol>
-        </div>
-      )}
+      {stateBreakdown.length > 0 && <StateFuelList title="Cheapest" rows={stateBreakdown} regionId={regionId} />}
+      {priciestBreakdown.length > 0 && <StateFuelList title="Most expensive" rows={priciestBreakdown} regionId={regionId} />}
 
       <div className="rounded-lg border border-border bg-surface p-4">
         <div className="text-xs font-medium text-muted">{region.label} trend (14d)</div>

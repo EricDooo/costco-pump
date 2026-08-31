@@ -71,3 +71,24 @@ const STATE_NAMES: Record<string, string> = {
 export function stateName(code: string): string {
   return STATE_NAMES[code] ?? code
 }
+
+// EIA's PADD (Petroleum Administration for Defense District) regions --
+// mirrors api/app/scraper/eia.py's REGION_CODES/PADD_BY_STATE. "R10" (plain
+// PADD 1) never actually appears in a RegionalComparison row (every state
+// maps to one of its 1A/1B/1C sub-regions instead), but it's included here
+// since the API's national/summary context could reasonably show it.
+const PADD_REGION_LABELS: Record<string, string> = {
+  NUS: 'National',
+  R10: 'PADD 1 -- East Coast',
+  R1X: 'PADD 1A -- New England',
+  R1Y: 'PADD 1B -- Central Atlantic',
+  R1Z: 'PADD 1C -- Lower Atlantic',
+  R20: 'PADD 2 -- Midwest',
+  R30: 'PADD 3 -- Gulf Coast',
+  R40: 'PADD 4 -- Rocky Mountain',
+  R50: 'PADD 5 -- West Coast',
+}
+
+export function paddRegionLabel(code: string): string {
+  return PADD_REGION_LABELS[code] ?? code
+}

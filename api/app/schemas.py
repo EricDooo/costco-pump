@@ -49,6 +49,8 @@ class StationDetail(StationSummary):
 class StateStat(BaseModel):
     state: str
     avg_regular_price: float
+    avg_premium_price: float | None
+    avg_diesel_price: float | None
 
 
 class MonthlyAverage(BaseModel):

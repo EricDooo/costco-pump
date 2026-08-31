@@ -47,6 +47,8 @@ export interface StationDetailData extends StationSummary {
 export interface StateStat {
   state: string
   avg_regular_price: number
+  avg_premium_price: number | null
+  avg_diesel_price: number | null
 }
 
 export interface MonthlyAverage {
@@ -97,6 +99,29 @@ export interface StateFuelStat {
   station_count: number
 }
 
+export interface RegionalComparison {
+  state: string
+  /** EIA PADD (sub-)region code, e.g. "R50" -- see stateNames.ts's PADD_REGION_LABELS. */
+  region_code: string
+  costco_avg_regular: number
+  region_avg_regular: number
+  /** region_avg_regular - costco_avg_regular -- positive means Costco is
+   * cheaper than its PADD region's own (non-Costco) average. */
+  savings: number
+  station_count: number
+}
+
+export interface BenchmarkSummary {
+  as_of: string | null
+  national_avg_regular_price: number | null
+  national_costco_avg_regular_price: number | null
+  national_savings: number | null
+  wti_spot_price: number | null
+  /** US-only -- EIA's PADD geography has nothing to compare Canada/UK/
+   * international warehouses against. */
+  by_state: RegionalComparison[]
+}
+
 async function getJson<T>(path: string): Promise<T> {
   // no-store: a browser-level cache on top of the API's own short server
   // cache has no upside, and did serve a stale dev response in practice.
@@ -108,7 +133,7 @@ async function getJson<T>(path: string): Promise<T> {
 export const api = {
   stations: (state?: string) => getJson<StationSummary[]>(`/stations${state ? `?state=${state}` : ''}`),
   station: (id: number) => getJson<StationDetailData>(`/stations/${id}`),
-  statsSummary: () => getJson<StatsSummary>('/stats/summary'),
+  statsSummary: (region?: string) => getJson<StatsSummary>(`/stats/summary${region ? `?region=${region}` : ''}`),
   trend: (opts?: { days?: number; region?: string; state?: string }) => {
     const params = new URLSearchParams()
     if (opts?.days) params.set('days', String(opts.days))
@@ -125,4 +150,5 @@ export const api = {
     return getJson<StateChangeStat[]>(`/stats/changes-by-state${qs ? `?${qs}` : ''}`)
   },
   states: (region?: string) => getJson<StateFuelStat[]>(`/stats/states${region ? `?region=${region}` : ''}`),
+  benchmarks: () => getJson<BenchmarkSummary>('/stats/benchmarks'),
 }
