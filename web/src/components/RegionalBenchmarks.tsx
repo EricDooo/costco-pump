@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import type { BenchmarkSummary, RegionalComparison } from '../lib/api'
 import { paddRegionLabel, stateName } from '../lib/stateNames'
 
@@ -123,7 +124,9 @@ function BenchmarkTable({ rows }: { rows: RegionalComparison[] }) {
               {sorted.map((r) => (
                 <tr key={r.state} className="border-t border-border hover:bg-background/50">
                   <td className="px-4 py-2">
-                    <div className="font-medium text-foreground">{stateName(r.state)}</div>
+                    <Link to={`/analytics/state/${r.state}`} className="font-medium text-foreground hover:text-primary hover:underline">
+                      {stateName(r.state)}
+                    </Link>
                     <div className="text-xs text-muted">{paddRegionLabel(r.region_code)}</div>
                   </td>
                   <td className="px-4 py-2 text-right font-mono text-foreground">{formatPrice(r.costco_avg_regular)}</td>
