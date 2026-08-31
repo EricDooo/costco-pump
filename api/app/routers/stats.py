@@ -7,7 +7,9 @@ from ..config import settings
 from ..db import get_session
 from ..limiter import limiter
 from ..schemas import (
+    BenchmarkSummary,
     MonthlyAverage,
+    RegionalComparison,
     StateChangeStat,
     StateFuelStat,
     StateStat,
@@ -15,6 +17,7 @@ from ..schemas import (
     TrendPoint,
     TrendSummary,
 )
+from ..scraper.eia import region_for_state
 from ..scraper.international import COUNTRIES
 
 router = APIRouter()
@@ -207,6 +210,17 @@ def _changes_by_state_sql(region: str):
     )
 
 
+_LATEST_REGIONAL_BENCHMARKS_SQL = text(
+    """
+    select distinct on (region_code) region_code, avg_regular_price, time
+    from regional_benchmarks
+    order by region_code, time desc
+    """
+)
+
+_LATEST_CRUDE_SQL = text("select wti_spot_price, time from crude_benchmarks order by time desc limit 1")
+
+
 def _states_sql(region: str):
     return text(
         f"""
@@ -328,6 +342,70 @@ async def stats_changes_by_state(
         for r in rows
     ]
     await set_cached(cache_key, [r.model_dump() for r in result], settings.stats_cache_seconds)
+    return result
+
+
+@router.get("/stats/benchmarks", response_model=BenchmarkSummary)
+@limiter.limit("30/minute")
+async def stats_benchmarks(request: Request, session: AsyncSession = Depends(get_session)) -> BenchmarkSummary:
+    """Costco's US prices against EIA's public national/PADD-region
+    averages + WTI crude spot (see scraper/eia.py) -- US-only, since EIA's
+    PADD geography has nothing to compare Canada/UK/international warehouses
+    against. Empty/all-null until worker.py's refresh_benchmarks job has run
+    at least once (needs EIA_API_KEY set -- see .env.example)."""
+    if cached := await get_cached("stats:benchmarks"):
+        return BenchmarkSummary(**cached)
+
+    benchmark_rows = (await session.execute(_LATEST_REGIONAL_BENCHMARKS_SQL)).mappings().all()
+    by_region = {r["region_code"]: float(r["avg_regular_price"]) for r in benchmark_rows}
+    as_of = max((r["time"] for r in benchmark_rows), default=None)
+
+    crude_row = (await session.execute(_LATEST_CRUDE_SQL)).mappings().first()
+    wti = float(crude_row["wti_spot_price"]) if crude_row else None
+    if crude_row and (as_of is None or crude_row["time"] > as_of):
+        as_of = crude_row["time"]
+
+    state_rows = (await session.execute(_states_sql("us"))).mappings().all()
+
+    by_state: list[RegionalComparison] = []
+    weighted_sum = 0.0
+    total_stations = 0
+    for r in state_rows:
+        if r["avg_regular"] is None:
+            continue
+        region_code = region_for_state(r["state"])
+        region_avg = by_region.get(region_code) if region_code else None
+        if region_avg is None:
+            continue
+        costco_avg = float(r["avg_regular"])
+        by_state.append(
+            RegionalComparison(
+                state=r["state"],
+                region_code=region_code,
+                costco_avg_regular=costco_avg,
+                region_avg_regular=region_avg,
+                savings=region_avg - costco_avg,
+                station_count=r["station_count"],
+            )
+        )
+        weighted_sum += costco_avg * r["station_count"]
+        total_stations += r["station_count"]
+
+    national_costco_avg = weighted_sum / total_stations if total_stations else None
+    national_avg = by_region.get("NUS")
+    national_savings = (
+        national_avg - national_costco_avg if national_avg is not None and national_costco_avg is not None else None
+    )
+
+    result = BenchmarkSummary(
+        as_of=as_of,
+        national_avg_regular_price=national_avg,
+        national_costco_avg_regular_price=national_costco_avg,
+        national_savings=national_savings,
+        wti_spot_price=wti,
+        by_state=by_state,
+    )
+    await set_cached("stats:benchmarks", result.model_dump(), settings.stats_cache_seconds)
     return result
 
 

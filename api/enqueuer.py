@@ -32,6 +32,12 @@ doesn't need pacing: the whole US/CA/UK database is one job. The
 international scheduler doesn't either, for a different reason -- see above,
 it's not a batch round at all.
 
+  - benchmark refresh (`benchmark_refresh_interval_seconds`, default daily):
+    national/PADD-region average gas prices + WTI crude spot from EIA's
+    public API (scraper/eia.py) -- entirely unrelated to Costco, just riding
+    the same queue/worker/schedule machinery as everything else here. A
+    single job, like the metadata sweep -- nothing to batch or pace.
+
 This process only enqueues; `worker.py` is what actually does the work.
 Separating them is the point of using a queue at all -- a slow or failed
 job never blocks the schedule, and scraping throughput can be scaled by
@@ -120,6 +126,12 @@ async def enqueue_metadata_sweep() -> None:
     logger.info("Enqueued metadata sweep job (batch %s)", batch_time)
 
 
+async def enqueue_benchmark_refresh() -> None:
+    batch_time = dt.datetime.now(dt.timezone.utc).isoformat()
+    sweep_queue.enqueue("app.scraper.jobs.refresh_benchmarks", batch_time, job_timeout=60)
+    logger.info("Enqueued regional-benchmark refresh job (batch %s)", batch_time)
+
+
 async def _international_scheduler() -> None:
     """Independently paces each country in COUNTRIES -- see module
     docstring's "international sweep" section for why this isn't a shared
@@ -182,6 +194,7 @@ async def main() -> None:
     await asyncio.gather(
         _schedule("price sweep", enqueue_price_sweep, settings.sweep_interval_seconds),
         _schedule("metadata sweep", enqueue_metadata_sweep, settings.metadata_sweep_interval_seconds),
+        _schedule("benchmark refresh", enqueue_benchmark_refresh, settings.benchmark_refresh_interval_seconds),
         _international_scheduler(),
     )
 

@@ -19,6 +19,10 @@ Three job types, matching enqueuer.py's three schedules:
     in one upsert, because the SAP API itself returns both together in one
     call, so there's no stale-null-price risk the way there is for the
     warehouses.json path.
+  - refresh_benchmarks: national/PADD-region average gas prices + WTI crude
+    spot, from EIA's public API (scraper/eia.py) -- unrelated to Costco
+    entirely, just written alongside everything else this queue already
+    does. Runs once a day; see config.settings.benchmark_refresh_interval_seconds.
 
 Each is a plain sync callable (SimpleWorker's contract) that does one
 `asyncio.run()` covering both the curl_cffi fetch and the DB write. That's
@@ -38,9 +42,13 @@ import asyncio
 import datetime as dt
 import logging
 
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+
 from ..db import SessionLocal
+from ..models import CrudeBenchmark, RegionalBenchmark
 from . import international
 from .client import fetch_all_warehouses, fetch_prices
+from .eia import fetch_benchmarks
 from .ingest import (
     filter_known_warehouse_ids,
     parse_warehouse,
@@ -120,5 +128,46 @@ async def _refresh_international_country(country: str, domain: str, offset: int,
                 continue
             await upsert_warehouse_and_reading(session, row, batch_time)
             count += 1
+        await session.commit()
+    return count
+
+
+def refresh_benchmarks(batch_time: str) -> int:
+    """Regional-benchmark job: national/PADD-region average gas prices + WTI
+    crude spot from EIA's public API (scraper/eia.py). Entirely independent
+    of Costco -- just another row written on the same queue/worker
+    machinery as everything else here."""
+    return asyncio.run(_refresh_benchmarks(dt.datetime.fromisoformat(batch_time)))
+
+
+async def _refresh_benchmarks(batch_time: dt.datetime) -> int:
+    gasoline, wti = await fetch_benchmarks()
+
+    count = 0
+    async with SessionLocal() as session:
+        for region_code, price in gasoline.items():
+            stmt = (
+                pg_insert(RegionalBenchmark)
+                .values(time=batch_time, region_code=region_code, avg_regular_price=price)
+                .on_conflict_do_update(
+                    index_elements=[RegionalBenchmark.time, RegionalBenchmark.region_code],
+                    set_={"avg_regular_price": price},
+                )
+            )
+            await session.execute(stmt)
+            count += 1
+
+        if wti is not None:
+            stmt = (
+                pg_insert(CrudeBenchmark)
+                .values(time=batch_time, wti_spot_price=wti)
+                .on_conflict_do_update(
+                    index_elements=[CrudeBenchmark.time],
+                    set_={"wti_spot_price": wti},
+                )
+            )
+            await session.execute(stmt)
+            count += 1
+
         await session.commit()
     return count
