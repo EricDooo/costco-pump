@@ -45,61 +45,85 @@ def _region_filter(region: str) -> str:
         raise HTTPException(status_code=400, detail=f"Unknown region: {region}")
     return f"w.id >= {offset} and w.id < {offset + 10_000}"
 
-# Compares each reading to the previous one for the same warehouse (via LAG)
-# to count how many individual price moves were cuts vs. hikes -- mirrors
-# what a human would see paging through one warehouse's history over time.
-_MOVES_SQL = text(
-    """
-    with moves as (
+# stats_summary's four queries below all take `region` and scope via
+# _region_filter, same as the trend/changes/states builders further down --
+# unscoped, this silently mixed every country's data into one number under a
+# header that reads as region-specific ("Aggregate trends for {region.label}"
+# on Analytics.tsx), which is what prompted moving these from module-level
+# constants to per-region functions.
+
+
+def _moves_sql(region: str):
+    """Compares each reading to the previous one for the same warehouse (via
+    LAG) to count how many individual price moves were cuts vs. hikes --
+    mirrors what a human would see paging through one warehouse's history
+    over time."""
+    return text(
+        f"""
+        with moves as (
+            select
+                p.warehouse_id,
+                p.regular_price,
+                lag(p.regular_price) over (partition by p.warehouse_id order by p.time) as prev_price
+            from price_readings p
+            join warehouses w on w.id = p.warehouse_id
+            where {_region_filter(region)}
+        )
         select
-            warehouse_id,
-            regular_price,
-            lag(regular_price) over (partition by warehouse_id order by time) as prev_price
-        from price_readings
+            count(*) filter (where regular_price < prev_price) as cuts,
+            count(*) filter (where regular_price > prev_price) as hikes
+        from moves
+        where prev_price is not null and regular_price is not null
+        """
     )
-    select
-        count(*) filter (where regular_price < prev_price) as cuts,
-        count(*) filter (where regular_price > prev_price) as hikes
-    from moves
-    where prev_price is not null and regular_price is not null
-    """
-)
 
-_TRACKED_DAYS_SQL = text(
-    "select extract(day from max(time) - min(time))::int as days from price_readings"
-)
 
-_STATE_AVG_TEMPLATE = """
-    select w.state, avg(p.regular_price) as avg_price
-    from price_readings p
-    join warehouses w on w.id = p.warehouse_id
-    where p.time > now() - interval '7 days' and p.regular_price is not null
-      -- state/province codes are only meaningful for the domestic (US/CA/UK)
-      -- id range -- scraper/international.py's records put the country's own
-      -- ISO code in this same column (e.g. Australia's is literally "AU"),
-      -- which would otherwise silently show up as if it were a US state or
-      -- Canadian province in this ranking.
-      and w.id < 900000
-      -- UK warehouses have no state code at all (postcodes, not states --
-      -- see scraper/ingest.py's parse_warehouse), so this column is '' for
-      -- all of them; group them under one real state instead of an
-      -- unlabeled blank row.
-      and w.state != ''
-    group by w.state
-    order by avg_price {direction}
-    limit 20
-    """
+def _tracked_days_sql(region: str):
+    return text(
+        f"""
+        select extract(day from max(p.time) - min(p.time))::int as days
+        from price_readings p
+        join warehouses w on w.id = p.warehouse_id
+        where {_region_filter(region)}
+        """
+    )
 
-_MONTHLY_AVG_SQL = text(
-    """
-    select to_char(date_trunc('month', time), 'YYYY-MM') as month,
-           avg(regular_price) as avg_price
-    from price_readings
-    where regular_price is not null
-    group by 1
-    order by 1
-    """
-)
+
+def _state_avg_sql(region: str, direction: str):
+    return text(
+        f"""
+        select
+            w.state,
+            avg(p.regular_price) as avg_regular,
+            avg(p.premium_price) filter (where p.premium_price is not null) as avg_premium,
+            avg(p.diesel_price) filter (where p.diesel_price is not null) as avg_diesel
+        from price_readings p
+        join warehouses w on w.id = p.warehouse_id
+        where {_region_filter(region)} and p.time > now() - interval '7 days' and p.regular_price is not null
+          -- UK warehouses have no state code at all (postcodes, not states --
+          -- see scraper/ingest.py's parse_warehouse), so this column is ''
+          -- for all of them; group them under one real state instead of an
+          -- unlabeled blank row.
+          and w.state != ''
+        group by w.state
+        order by avg_regular {direction}
+        limit 20
+        """
+    )
+
+
+def _monthly_avg_sql(region: str):
+    return text(
+        f"""
+        select to_char(date_trunc('month', p.time), 'YYYY-MM') as month,
+               avg(p.regular_price) as avg_price
+        from price_readings p
+        join warehouses w on w.id = p.warehouse_id
+        where {_region_filter(region)} and p.regular_price is not null
+        group by 1
+        order by 1
+        """
+    )
 
 # `region` scopes every query below via _region_filter; `with_state` (where
 # present) adds a further `w.state = :state` narrowing for a per-state page
@@ -239,31 +263,43 @@ def _states_sql(region: str):
     )
 
 
+def _state_stat(r) -> StateStat:
+    return StateStat(
+        state=r["state"],
+        avg_regular_price=float(r["avg_regular"]),
+        avg_premium_price=float(r["avg_premium"]) if r["avg_premium"] is not None else None,
+        avg_diesel_price=float(r["avg_diesel"]) if r["avg_diesel"] is not None else None,
+    )
+
+
 @router.get("/stats/summary", response_model=StatsSummary)
 @limiter.limit("30/minute")
-async def stats_summary(request: Request, session: AsyncSession = Depends(get_session)) -> StatsSummary:
-    if cached := await get_cached("stats:summary"):
+async def stats_summary(
+    request: Request, region: str = Query(default="us"), session: AsyncSession = Depends(get_session)
+) -> StatsSummary:
+    cache_key = f"stats:summary:{region}"
+    if cached := await get_cached(cache_key):
         return StatsSummary(**cached)
 
-    moves = (await session.execute(_MOVES_SQL)).mappings().one()
-    tracked_days = (await session.execute(_TRACKED_DAYS_SQL)).scalar() or 0
+    moves = (await session.execute(_moves_sql(region))).mappings().one()
+    tracked_days = (await session.execute(_tracked_days_sql(region))).scalar() or 0
 
-    cheapest = (await session.execute(text(_STATE_AVG_TEMPLATE.format(direction="asc")))).mappings().all()
-    priciest = (await session.execute(text(_STATE_AVG_TEMPLATE.format(direction="desc")))).mappings().all()
-    monthly = (await session.execute(_MONTHLY_AVG_SQL)).mappings().all()
+    cheapest = (await session.execute(_state_avg_sql(region, "asc"))).mappings().all()
+    priciest = (await session.execute(_state_avg_sql(region, "desc"))).mappings().all()
+    monthly = (await session.execute(_monthly_avg_sql(region))).mappings().all()
 
     result = StatsSummary(
         tracked_days=tracked_days,
         total_price_moves=(moves["cuts"] or 0) + (moves["hikes"] or 0),
         hikes=moves["hikes"] or 0,
         cuts=moves["cuts"] or 0,
-        cheapest_states=[StateStat(state=r["state"], avg_regular_price=float(r["avg_price"])) for r in cheapest],
-        priciest_states=[StateStat(state=r["state"], avg_regular_price=float(r["avg_price"])) for r in priciest],
+        cheapest_states=[_state_stat(r) for r in cheapest],
+        priciest_states=[_state_stat(r) for r in priciest],
         monthly_averages=[
             MonthlyAverage(month=r["month"], avg_regular_price=float(r["avg_price"])) for r in monthly
         ],
     )
-    await set_cached("stats:summary", result.model_dump(), settings.stats_cache_seconds)
+    await set_cached(cache_key, result.model_dump(), settings.stats_cache_seconds)
     return result
 
 
