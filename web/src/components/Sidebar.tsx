@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { TrendChart } from '../pages/Analytics'
 import { StationPanel } from './StationPanel'
 import type { StateStat, StationSummary, TrendSummary } from '../lib/api'
@@ -34,9 +35,11 @@ function StateFuelList({ title, rows, regionId }: { title: string; rows: StateSt
           <tbody>
             {rows.map((s, i) => (
               <tr key={s.state}>
-                <td className="py-1 text-foreground">
-                  <span className="mr-1.5 text-muted">{i + 1}</span>
-                  {s.state}
+                <td className="py-1">
+                  <Link to={`/analytics/state/${s.state}`} className="text-foreground hover:text-primary hover:underline">
+                    <span className="mr-1.5 text-muted">{i + 1}</span>
+                    {s.state}
+                  </Link>
                 </td>
                 <td className="py-1 text-right font-mono text-blue-600">${s.avg_regular_price.toFixed(2)}</td>
                 <td className="py-1 text-right font-mono text-red-600">
