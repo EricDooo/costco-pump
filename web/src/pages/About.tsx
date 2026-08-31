@@ -4,28 +4,27 @@ export function About() {
       <h1 className="text-2xl font-bold text-foreground">About</h1>
       <div className="mt-6 max-w-2xl space-y-4 text-sm text-muted">
         <p>
-          Costco gas is famously cheap, but Costco doesn't publish a nationwide price
-          list anywhere -- you only get one warehouse's price at a time, on its own
-          page. This site periodically checks every US Costco with a gas station and
-          keeps every price it has ever seen, so you can look at a trend instead of a
-          single snapshot.
+          Costco gas is famously cheap, but Costco doesn't publish a price list
+          anywhere. You get one warehouse's price at a time, on its own page, and
+          that's it. This site checks every Costco gas station it can find (the US,
+          Canada, the UK, and eight more countries at this point) on a regular
+          schedule and keeps every price it's ever seen, so you get an actual trend
+          instead of a single snapshot.
         </p>
         <p>
-          Prices come from Costco's own public warehouse-locator lookup -- the same one
-          the "find a warehouse" search on costco.com uses -- checked on a regular
-          schedule at a deliberately low request rate. This is not an official Costco
-          feed, and it can lag a real-time in-store price by however long it's been
-          since the last check.
+          Prices come from Costco's own public warehouse-locator lookup, the same
+          one behind the "find a warehouse" search on costco.com, checked on a
+          fixed schedule at a low request rate. It's not an official Costco feed,
+          so a price shown here can lag what's posted at the pump by however long
+          it's been since the last check.
         </p>
         <p>
-          Costco's site sits behind Akamai's bot protection, and this project doesn't
-          try to get past it -- the lookup this site calls isn't behind that gate at
-          all. It's the same public warehouse-locator API Costco's own site now calls
-          client-side, found by reading their public JS the same way anyone's browser
-          dev tools would show it. Reaching it does need a request whose TLS handshake
-          looks like an ordinary browser's -- Costco's edge silently drops anything
-          else, gate or no gate -- but there's no browser involved, no JavaScript runs,
-          and nothing is being solved or bypassed.
+          Alongside Costco's own numbers, the site pulls in public data from the
+          U.S. Energy Information Administration: regional averages, crude oil
+          prices, and weekly gasoline supply figures. That's what powers the
+          regional comparison on the Analytics page, so you can see how Costco
+          stacks up against the rest of the market and get a sense of why prices
+          are moving, not just that they are.
         </p>
         <p>
           Built and maintained by{' '}
