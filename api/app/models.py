@@ -86,3 +86,31 @@ class CrudeBenchmark(Base):
 
     time: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
     wti_spot_price: Mapped[float] = mapped_column(Numeric(7, 3))
+
+
+class GasolineStocksBenchmark(Base):
+    """Weekly US commercial gasoline inventory, national + PADD region, from
+    EIA's Weekly Petroleum Status Report (petroleum/stoc/wstk -- confirmed
+    the same region_code set as RegionalBenchmark's price series). Thousand
+    barrels. The "why" behind a price move that RegionalBenchmark/
+    CrudeBenchmark alone can't distinguish: a regional spike with normal
+    stocks is probably just following crude: with stocks well below normal
+    for that region, it's a genuine local supply squeeze."""
+
+    __tablename__ = "gasoline_stocks_benchmarks"
+
+    time: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    region_code: Mapped[str] = mapped_column(String(10), primary_key=True)
+    stocks_mbbl: Mapped[float] = mapped_column(Numeric(10, 1))
+
+
+class GasolineDemandBenchmark(Base):
+    """Weekly US finished-motor-gasoline "product supplied" -- EIA's
+    standard demand proxy (petroleum/cons/wpsup). National only; that
+    dataset has no duoarea/region facet at all, unlike every other EIA
+    series this project pulls."""
+
+    __tablename__ = "gasoline_demand_benchmarks"
+
+    time: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    demand_mbbl_per_day: Mapped[float] = mapped_column(Numeric(10, 1))

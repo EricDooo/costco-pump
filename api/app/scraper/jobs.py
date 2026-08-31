@@ -45,7 +45,7 @@ import logging
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from ..db import SessionLocal
-from ..models import CrudeBenchmark, RegionalBenchmark
+from ..models import CrudeBenchmark, GasolineDemandBenchmark, GasolineStocksBenchmark, RegionalBenchmark
 from . import international
 from .client import fetch_all_warehouses, fetch_prices
 from .eia import fetch_benchmarks
@@ -133,15 +133,16 @@ async def _refresh_international_country(country: str, domain: str, offset: int,
 
 
 def refresh_benchmarks(batch_time: str) -> int:
-    """Regional-benchmark job: national/PADD-region average gas prices + WTI
-    crude spot from EIA's public API (scraper/eia.py). Entirely independent
-    of Costco -- just another row written on the same queue/worker
-    machinery as everything else here."""
+    """Regional-benchmark job: national/PADD-region average gas prices, WTI
+    crude spot, gasoline stocks, and national gasoline demand, all from
+    EIA's public API (scraper/eia.py). Entirely independent of Costco --
+    just another row written on the same queue/worker machinery as
+    everything else here."""
     return asyncio.run(_refresh_benchmarks(dt.datetime.fromisoformat(batch_time)))
 
 
 async def _refresh_benchmarks(batch_time: dt.datetime) -> int:
-    gasoline, wti = await fetch_benchmarks()
+    gasoline, wti, stocks, demand = await fetch_benchmarks()
 
     count = 0
     async with SessionLocal() as session:
@@ -157,6 +158,18 @@ async def _refresh_benchmarks(batch_time: dt.datetime) -> int:
             await session.execute(stmt)
             count += 1
 
+        for region_code, stocks_mbbl in stocks.items():
+            stmt = (
+                pg_insert(GasolineStocksBenchmark)
+                .values(time=batch_time, region_code=region_code, stocks_mbbl=stocks_mbbl)
+                .on_conflict_do_update(
+                    index_elements=[GasolineStocksBenchmark.time, GasolineStocksBenchmark.region_code],
+                    set_={"stocks_mbbl": stocks_mbbl},
+                )
+            )
+            await session.execute(stmt)
+            count += 1
+
         if wti is not None:
             stmt = (
                 pg_insert(CrudeBenchmark)
@@ -164,6 +177,18 @@ async def _refresh_benchmarks(batch_time: dt.datetime) -> int:
                 .on_conflict_do_update(
                     index_elements=[CrudeBenchmark.time],
                     set_={"wti_spot_price": wti},
+                )
+            )
+            await session.execute(stmt)
+            count += 1
+
+        if demand is not None:
+            stmt = (
+                pg_insert(GasolineDemandBenchmark)
+                .values(time=batch_time, demand_mbbl_per_day=demand)
+                .on_conflict_do_update(
+                    index_elements=[GasolineDemandBenchmark.time],
+                    set_={"demand_mbbl_per_day": demand},
                 )
             )
             await session.execute(stmt)

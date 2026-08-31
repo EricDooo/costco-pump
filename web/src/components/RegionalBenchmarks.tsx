@@ -11,6 +11,15 @@ function formatCents(dollars: number): string {
   return `${dollars >= 0 ? '+' : '-'}${cents.toFixed(1)}¢`
 }
 
+// EIA reports these in MBBL/MBBL-per-day -- "thousand barrels" in petroleum
+// industry convention (Roman numeral M), not "million" -- so this converts
+// to an actual million-barrels figure for a general audience instead of
+// echoing EIA's own confusing unit.
+function formatMbbl(thousandBarrels: number | null, perDay: boolean): string {
+  if (thousandBarrels === null) return '--'
+  return `${(thousandBarrels / 1000).toFixed(1)}M bbl${perDay ? '/day' : ''}`
+}
+
 function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className="rounded-lg border border-border bg-surface p-4">
@@ -21,13 +30,14 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
   )
 }
 
-type SortKey = 'state' | 'costco_avg_regular' | 'region_avg_regular' | 'savings'
+type SortKey = 'state' | 'costco_avg_regular' | 'region_avg_regular' | 'savings' | 'region_stocks_mbbl'
 
 const COLUMNS: { key: SortKey; label: string; align?: 'right' }[] = [
   { key: 'state', label: 'State' },
   { key: 'costco_avg_regular', label: 'Costco avg', align: 'right' },
   { key: 'region_avg_regular', label: 'Region avg', align: 'right' },
   { key: 'savings', label: 'Savings', align: 'right' },
+  { key: 'region_stocks_mbbl', label: 'Region stocks', align: 'right' },
 ]
 
 function SortIcon({ direction }: { direction: 'asc' | 'desc' | null }) {
@@ -51,6 +61,8 @@ function BenchmarkTable({ rows }: { rows: RegionalComparison[] }) {
     return [...filtered].sort((a, b) => {
       const av = a[sortKey]
       const bv = b[sortKey]
+      if (av === null) return bv === null ? 0 : 1
+      if (bv === null) return -1
       if (typeof av === 'string' || typeof bv === 'string') return String(av).localeCompare(String(bv)) * dir
       return (av - bv) * dir
     })
@@ -119,6 +131,7 @@ function BenchmarkTable({ rows }: { rows: RegionalComparison[] }) {
                   <td className={`px-4 py-2 text-right font-mono ${r.savings >= 0 ? 'text-positive' : 'text-negative'}`}>
                     {formatCents(r.savings)}
                   </td>
+                  <td className="px-4 py-2 text-right font-mono text-muted">{formatMbbl(r.region_stocks_mbbl, false)}</td>
                 </tr>
               ))}
             </tbody>
@@ -149,7 +162,7 @@ export function RegionalBenchmarks({ data }: { data: BenchmarkSummary | null }) 
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-3">
         <StatCard label="Costco US average" value={formatPrice(data.national_costco_avg_regular_price)} />
         <StatCard label="EIA national average" value={formatPrice(data.national_avg_regular_price)} />
         <StatCard
@@ -158,6 +171,16 @@ export function RegionalBenchmarks({ data }: { data: BenchmarkSummary | null }) 
           sub={savings !== null ? (savings >= 0 ? 'Costco is cheaper' : 'Costco is pricier') : undefined}
         />
         <StatCard label="WTI crude spot" value={data.wti_spot_price !== null ? `$${data.wti_spot_price.toFixed(2)}/bbl` : '--'} />
+        <StatCard
+          label="US gasoline stocks"
+          value={formatMbbl(data.national_gasoline_stocks_mbbl, false)}
+          sub="Weekly commercial inventory"
+        />
+        <StatCard
+          label="US gasoline demand"
+          value={formatMbbl(data.national_gasoline_demand_mbbl_per_day, true)}
+          sub="Weekly product supplied"
+        />
       </div>
 
       <BenchmarkTable rows={data.by_state} />

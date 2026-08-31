@@ -109,6 +109,10 @@ export interface RegionalComparison {
    * cheaper than its PADD region's own (non-Costco) average. */
   savings: number
   station_count: number
+  /** That PADD region's weekly gasoline inventory, thousand barrels -- the
+   * "why" a price move happened: near-normal stocks means it's probably
+   * just following crude; well below normal is a real regional squeeze. */
+  region_stocks_mbbl: number | null
 }
 
 export interface BenchmarkSummary {
@@ -117,6 +121,8 @@ export interface BenchmarkSummary {
   national_costco_avg_regular_price: number | null
   national_savings: number | null
   wti_spot_price: number | null
+  national_gasoline_stocks_mbbl: number | null
+  national_gasoline_demand_mbbl_per_day: number | null
   /** US-only -- EIA's PADD geography has nothing to compare Canada/UK/
    * international warehouses against. */
   by_state: RegionalComparison[]
