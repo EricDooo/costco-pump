@@ -112,6 +112,11 @@ class RegionalComparison(BaseModel):
     # cheaper than its EIA PADD region's non-Costco average.
     savings: float
     station_count: int
+    # That PADD region's weekly gasoline inventory, thousand barrels -- the
+    # "why": a region running above its own average with stocks near normal
+    # is probably just following crude; well below normal is a real supply
+    # squeeze. None until the benchmark job has a stocks reading for it.
+    region_stocks_mbbl: float | None
 
 
 class BenchmarkSummary(BaseModel):
@@ -122,4 +127,6 @@ class BenchmarkSummary(BaseModel):
     national_costco_avg_regular_price: float | None
     national_savings: float | None
     wti_spot_price: float | None
+    national_gasoline_stocks_mbbl: float | None
+    national_gasoline_demand_mbbl_per_day: float | None
     by_state: list[RegionalComparison]

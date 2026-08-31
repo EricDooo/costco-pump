@@ -244,6 +244,18 @@ _LATEST_REGIONAL_BENCHMARKS_SQL = text(
 
 _LATEST_CRUDE_SQL = text("select wti_spot_price, time from crude_benchmarks order by time desc limit 1")
 
+_LATEST_GASOLINE_STOCKS_SQL = text(
+    """
+    select distinct on (region_code) region_code, stocks_mbbl, time
+    from gasoline_stocks_benchmarks
+    order by region_code, time desc
+    """
+)
+
+_LATEST_GASOLINE_DEMAND_SQL = text(
+    "select demand_mbbl_per_day, time from gasoline_demand_benchmarks order by time desc limit 1"
+)
+
 
 def _states_sql(region: str):
     return text(
@@ -401,6 +413,17 @@ async def stats_benchmarks(request: Request, session: AsyncSession = Depends(get
     if crude_row and (as_of is None or crude_row["time"] > as_of):
         as_of = crude_row["time"]
 
+    stocks_rows = (await session.execute(_LATEST_GASOLINE_STOCKS_SQL)).mappings().all()
+    stocks_by_region = {r["region_code"]: float(r["stocks_mbbl"]) for r in stocks_rows}
+    for r in stocks_rows:
+        if as_of is None or r["time"] > as_of:
+            as_of = r["time"]
+
+    demand_row = (await session.execute(_LATEST_GASOLINE_DEMAND_SQL)).mappings().first()
+    demand = float(demand_row["demand_mbbl_per_day"]) if demand_row else None
+    if demand_row and (as_of is None or demand_row["time"] > as_of):
+        as_of = demand_row["time"]
+
     state_rows = (await session.execute(_states_sql("us"))).mappings().all()
 
     by_state: list[RegionalComparison] = []
@@ -422,6 +445,7 @@ async def stats_benchmarks(request: Request, session: AsyncSession = Depends(get
                 region_avg_regular=region_avg,
                 savings=region_avg - costco_avg,
                 station_count=r["station_count"],
+                region_stocks_mbbl=stocks_by_region.get(region_code),
             )
         )
         weighted_sum += costco_avg * r["station_count"]
@@ -439,6 +463,8 @@ async def stats_benchmarks(request: Request, session: AsyncSession = Depends(get
         national_costco_avg_regular_price=national_costco_avg,
         national_savings=national_savings,
         wti_spot_price=wti,
+        national_gasoline_stocks_mbbl=stocks_by_region.get("NUS"),
+        national_gasoline_demand_mbbl_per_day=demand,
         by_state=by_state,
     )
     await set_cached("stats:benchmarks", result.model_dump(), settings.stats_cache_seconds)

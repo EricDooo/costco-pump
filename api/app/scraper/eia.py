@@ -8,7 +8,7 @@ CURL_OPTIONS' IPv4 forcing -- see client.py's docstring for why this
 project's Docker networks need that regardless of which host is being
 called.
 
-Two datasets, both confirmed live against the real API while building this:
+Four datasets, all confirmed live against the real API while building this:
 
   - petroleum/pri/gnd (Gasoline and Diesel Retail Prices): weekly regular-
     gasoline averages. Despite the name this does NOT cover all 50 states --
@@ -21,10 +21,25 @@ Two datasets, both confirmed live against the real API while building this:
   - petroleum/pri/spt (Spot Prices for Crude Oil and Petroleum Products):
     daily WTI (Cushing, OK) spot price, series id RWTC -- cheap context for
     *why* retail prices moved, independent of any region.
+  - petroleum/stoc/wstk (Weekly Petroleum Status Report -- Stocks): weekly US
+    commercial gasoline inventory. Confirmed the exact same duoarea/region_code
+    set as the price series above (NUS + all PADD (sub-)regions) -- same
+    REGION_CODES reused as-is.
+    Thousand barrels (MBBL).
+  - petroleum/cons/wpsup (Weekly Product Supplied): weekly finished-motor-
+    gasoline "product supplied" -- EIA's standard demand proxy. National
+    only; confirmed this dataset has no duoarea facet at all, unlike every
+    other series here. Thousand barrels/day (MBBL/D).
+
+Together, stocks + demand are the "why" a price benchmark alone can't answer:
+RegionalBenchmark/CrudeBenchmark show a region running above its own average
+or above what WTI would predict, but not whether that's a genuine regional
+supply squeeze (stocks well below normal for that PADD) or just following a
+national demand/crude move.
 
 Refreshed once a day (see config.settings.benchmark_refresh_interval_seconds)
--- polling more often than that buys nothing: the gasoline series only
-update weekly (Mondays) and crude spot daily.
+-- polling more often than that buys nothing: every one of these series
+updates at most weekly (WTI's the only daily one).
 """
 
 import logging
@@ -40,6 +55,8 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://api.eia.gov"
 GASOLINE_PATH = "/v2/petroleum/pri/gnd/data"
 CRUDE_PATH = "/v2/petroleum/pri/spt/data"
+STOCKS_PATH = "/v2/petroleum/stoc/wstk/data"
+DEMAND_PATH = "/v2/petroleum/cons/wpsup/data"
 
 CURL_OPTIONS = {CurlOpt.IPRESOLVE: CurlIpResolve.V4}
 
@@ -73,19 +90,22 @@ PADD_BY_STATE: dict[str, str] = {
     "AK": "R50", "AZ": "R50", "CA": "R50", "HI": "R50", "NV": "R50", "OR": "R50", "WA": "R50",
 }  # fmt: skip
 
-# Regular-gasoline, all-formulations product code -- matches client.py's own
-# regular/premium/diesel scope (no premium/diesel benchmark here: EIA's
-# retail series is comprehensive for regular but spottier for the other two
-# grades at this same region granularity).
-GASOLINE_PRODUCT = "EPMR"
-WTI_SERIES = "RWTC"
+# Product codes -- all confirmed real via the API's own facet listings while
+# building this.
+GASOLINE_PRODUCT = "EPMR"  # Regular Gasoline (pri/gnd) -- see client.py's own
+# regular/premium/diesel scope note: no premium/diesel price benchmark here,
+# EIA's retail series is comprehensive for regular but spottier for the
+# other two grades at this same region granularity.
+WTI_SERIES = "RWTC"  # Cushing, OK WTI Spot Price FOB (pri/spt)
+STOCKS_PRODUCT = "EPM0"  # Total Gasoline (stoc/wstk)
+DEMAND_PRODUCT = "EPM0F"  # Finished Motor Gasoline (cons/wpsup)
 
 # Rows requested per fetch -- more than len(REGION_CODES)/1 so a fetch that
 # lands between two periods (not every region necessarily posts on the exact
 # same day) still has enough rows to find each region's latest value from,
 # without needing a second round-trip.
-GASOLINE_FETCH_ROWS = len(REGION_CODES) * 3
-CRUDE_FETCH_ROWS = 5
+REGION_FETCH_ROWS = len(REGION_CODES) * 3
+SINGLE_FETCH_ROWS = 5
 
 
 async def _get(client: AsyncSession, path: str, params: dict) -> dict:
@@ -94,21 +114,23 @@ async def _get(client: AsyncSession, path: str, params: dict) -> dict:
     return resp.json()
 
 
-async def fetch_regional_gasoline() -> dict[str, float]:
-    """{region_code: avg_regular_price} for every code in REGION_CODES --
-    each region's most recent reported value, which may not all be the exact
-    same period (a region occasionally lags by a week)."""
+async def _fetch_by_region(path: str, product: str, frequency: str, what: str) -> dict[str, float]:
+    """{region_code: value} for every code in REGION_CODES -- each region's
+    most recent reported value, which may not all be the exact same period
+    (a region occasionally lags by a week). Shared by fetch_regional_gasoline
+    and fetch_gasoline_stocks -- same duoarea set, same "newest row per
+    region" logic, just a different dataset/product."""
     if not settings.eia_api_key:
-        logger.warning("EIA_API_KEY not set -- skipping regional gasoline benchmark fetch")
+        logger.warning("EIA_API_KEY not set -- skipping %s fetch", what)
         return {}
 
     params = {
-        "frequency": "weekly",
+        "frequency": frequency,
         "data[0]": "value",
-        "facets[product][0]": GASOLINE_PRODUCT,
+        "facets[product][0]": product,
         "sort[0][column]": "period",
         "sort[0][direction]": "desc",
-        "length": GASOLINE_FETCH_ROWS,
+        "length": REGION_FETCH_ROWS,
     }
     for i, region in enumerate(REGION_CODES):
         params[f"facets[duoarea][{i}]"] = region
@@ -117,46 +139,47 @@ async def fetch_regional_gasoline() -> dict[str, float]:
         base_url=BASE_URL, curl_options=CURL_OPTIONS, timeout=settings.scrape_timeout_seconds
     ) as client:
         try:
-            data = await _get(client, GASOLINE_PATH, params)
+            data = await _get(client, path, params)
         except (RequestException, ValueError) as exc:
-            logger.warning("Regional gasoline benchmark fetch failed: %s", exc)
+            logger.warning("%s fetch failed: %s", what, exc)
             return {}
 
-    prices: dict[str, float] = {}
+    values: dict[str, float] = {}
     for row in data.get("response", {}).get("data", []):
         region = row.get("duoarea")
         value = row.get("value")
         # Rows are sorted newest-first -- first value seen per region is its
         # most recent, so a region that already has one is a stale repeat.
-        if region in REGION_CODES and region not in prices and value not in (None, ""):
+        if region in REGION_CODES and region not in values and value not in (None, ""):
             try:
-                prices[region] = float(value)
+                values[region] = float(value)
             except ValueError:
                 continue
-    return prices
+    return values
 
 
-async def fetch_wti_spot() -> float | None:
-    """Most recent WTI (Cushing, OK) spot price, dollars per barrel."""
+async def _fetch_single(path: str, frequency: str, facet_key: str, facet_value: str, what: str) -> float | None:
+    """Most recent single value from a national-only, no-region series --
+    shared by fetch_wti_spot and fetch_gasoline_demand."""
     if not settings.eia_api_key:
-        logger.warning("EIA_API_KEY not set -- skipping WTI crude benchmark fetch")
+        logger.warning("EIA_API_KEY not set -- skipping %s fetch", what)
         return None
 
     params = {
-        "frequency": "daily",
+        "frequency": frequency,
         "data[0]": "value",
-        "facets[series][0]": WTI_SERIES,
+        f"facets[{facet_key}][0]": facet_value,
         "sort[0][column]": "period",
         "sort[0][direction]": "desc",
-        "length": CRUDE_FETCH_ROWS,
+        "length": SINGLE_FETCH_ROWS,
     }
     async with AsyncSession(
         base_url=BASE_URL, curl_options=CURL_OPTIONS, timeout=settings.scrape_timeout_seconds
     ) as client:
         try:
-            data = await _get(client, CRUDE_PATH, params)
+            data = await _get(client, path, params)
         except (RequestException, ValueError) as exc:
-            logger.warning("WTI crude benchmark fetch failed: %s", exc)
+            logger.warning("%s fetch failed: %s", what, exc)
             return None
 
     for row in data.get("response", {}).get("data", []):
@@ -169,12 +192,37 @@ async def fetch_wti_spot() -> float | None:
     return None
 
 
-async def fetch_benchmarks() -> tuple[dict[str, float], float | None]:
-    """(regional gasoline prices, WTI spot price) -- what scraper/jobs.py's
-    refresh_benchmarks job writes to regional_benchmarks/crude_benchmarks."""
+async def fetch_regional_gasoline() -> dict[str, float]:
+    """{region_code: avg_regular_price}, $/gal."""
+    return await _fetch_by_region(GASOLINE_PATH, GASOLINE_PRODUCT, "weekly", "regional gasoline benchmark")
+
+
+async def fetch_wti_spot() -> float | None:
+    """Most recent WTI (Cushing, OK) spot price, dollars per barrel."""
+    return await _fetch_single(CRUDE_PATH, "daily", "series", WTI_SERIES, "WTI crude benchmark")
+
+
+async def fetch_gasoline_stocks() -> dict[str, float]:
+    """{region_code: stocks_mbbl} -- weekly US commercial gasoline
+    inventory, thousand barrels."""
+    return await _fetch_by_region(STOCKS_PATH, STOCKS_PRODUCT, "weekly", "gasoline stocks benchmark")
+
+
+async def fetch_gasoline_demand() -> float | None:
+    """Most recent weekly US finished-motor-gasoline product supplied --
+    EIA's standard demand proxy, thousand barrels/day. National only."""
+    return await _fetch_single(DEMAND_PATH, "weekly", "product", DEMAND_PRODUCT, "gasoline demand benchmark")
+
+
+async def fetch_benchmarks() -> tuple[dict[str, float], float | None, dict[str, float], float | None]:
+    """(regional gasoline prices, WTI spot, regional gasoline stocks,
+    national gasoline demand) -- what scraper/jobs.py's refresh_benchmarks
+    job writes to the four benchmark tables."""
     gasoline = await fetch_regional_gasoline()
     wti = await fetch_wti_spot()
-    return gasoline, wti
+    stocks = await fetch_gasoline_stocks()
+    demand = await fetch_gasoline_demand()
+    return gasoline, wti, stocks, demand
 
 
 def region_for_state(state: str) -> str | None:
