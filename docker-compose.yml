@@ -54,6 +54,9 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://gas:${POSTGRES_PASSWORD}@postgres:5432/gas
       REDIS_URL: redis://redis:6379/0
+      # Only refresh_benchmarks (scraper/eia.py) uses this -- worker runs
+      # the job, not enqueuer, which only ever writes a batch_time.
+      EIA_API_KEY: ${EIA_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy

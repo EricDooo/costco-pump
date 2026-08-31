@@ -36,5 +36,17 @@ class Settings(BaseSettings):
     stats_cache_seconds: int = 300
     stations_cache_seconds: int = 300
 
+    # Free key from https://www.eia.gov/opendata/register.php -- not a
+    # scraping credential, just an API rate-limit identifier for a public
+    # government data source. See scraper/eia.py.
+    eia_api_key: str = ""
+
+    # How often the regional-benchmark job (national/PADD-region average gas
+    # prices + WTI crude spot, see scraper/eia.py) refreshes. EIA's own
+    # retail gasoline series only update weekly (Mondays) and crude spot
+    # daily -- there's nothing to gain from polling more than once a day, so
+    # this doesn't share client.py's hourly cadence.
+    benchmark_refresh_interval_seconds: int = 60 * 60 * 24
+
 
 settings = Settings()

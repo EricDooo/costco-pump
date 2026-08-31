@@ -99,3 +99,25 @@ class StateFuelStat(BaseModel):
     avg_premium: float | None
     avg_diesel: float | None
     station_count: int
+
+
+class RegionalComparison(BaseModel):
+    state: str
+    region_code: str
+    costco_avg_regular: float
+    region_avg_regular: float
+    # region_avg_regular - costco_avg_regular -- positive means Costco is
+    # cheaper than its EIA PADD region's non-Costco average.
+    savings: float
+    station_count: int
+
+
+class BenchmarkSummary(BaseModel):
+    as_of: dt.datetime | None
+    national_avg_regular_price: float | None
+    # Costco's own US-wide average regular price, station-count-weighted --
+    # same 7-day window _states_sql already uses, just rolled up.
+    national_costco_avg_regular_price: float | None
+    national_savings: float | None
+    wti_spot_price: float | None
+    by_state: list[RegionalComparison]

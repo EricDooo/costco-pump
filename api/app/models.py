@@ -56,3 +56,33 @@ class PriceReading(Base):
     diesel_price: Mapped[float | None] = mapped_column(Numeric(7, 3), nullable=True)
 
     warehouse: Mapped[Warehouse] = relationship(back_populates="readings")
+
+
+class RegionalBenchmark(Base):
+    """One row per (fetch, region) -- national + each PADD region/sub-region's
+    average retail regular-gasoline price, from EIA's public gnd dataset (see
+    scraper/eia.py). A real time series, unlike PriceReading's per-warehouse
+    granularity isn't needed here: this is small (9 regions, refreshed daily)
+    and the whole point is trend/comparison ("Costco vs. this state's PADD
+    region over time"), so history is kept rather than overwritten in place.
+    """
+
+    __tablename__ = "regional_benchmarks"
+
+    time: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    # "NUS" (national) or an EIA PADD/sub-PADD code ("R10", "R1X", "R1Y",
+    # "R1Z", "R20", "R30", "R40", "R50") -- see scraper/eia.py's
+    # PADD_BY_STATE for the state -> region_code mapping.
+    region_code: Mapped[str] = mapped_column(String(10), primary_key=True)
+    avg_regular_price: Mapped[float] = mapped_column(Numeric(7, 3))
+
+
+class CrudeBenchmark(Base):
+    """WTI (Cushing, OK) crude spot price -- daily, no region dimension, so
+    it's its own tiny table rather than a magic row in RegionalBenchmark.
+    Context for *why* prices moved, not a per-region comparison."""
+
+    __tablename__ = "crude_benchmarks"
+
+    time: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    wti_spot_price: Mapped[float] = mapped_column(Numeric(7, 3))
